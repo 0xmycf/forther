@@ -7,90 +7,91 @@ module BinTree
   , insert
   , delete
   , update
-  , find
+  , lookup
   ) where
+import Prelude hiding (lookup)
 
-data BinTree a
+data BinTree k v
   = Empty
-  | Node (BinTree a) a (BinTree a)
+  | Node (BinTree k v) k v (BinTree k v)
   deriving (Show)
 
-empty :: BinTree a
+empty :: BinTree k v
 empty = Empty
 
-singleton :: a -> BinTree a
-singleton x = Node Empty x Empty
+singleton :: k -> v -> BinTree k v
+singleton k v = Node Empty k v Empty
 
-inOrder :: BinTree a -> [a]
+inOrder :: BinTree k v -> [(k,v)]
 inOrder Empty = []
-inOrder (Node left x right) =
-  inOrder left ++ [x] ++ inOrder right
+inOrder (Node left k v right) =
+  inOrder left ++ [(k,v)] ++ inOrder right
 
-fromList :: Ord a => [a] -> BinTree a
-fromList = foldr insert Empty
+fromList :: Ord k => [(k,v)] -> BinTree k v
+fromList = foldr (uncurry insert) Empty
 
-insert :: Ord a => a -> BinTree a -> BinTree a
-insert x Empty = singleton x
-insert x (Node left y right)
-  = case compare x y of
-      EQ -> Node left y right
-      LT -> Node (insert x left) y right
-      GT -> Node left y (insert x right)
+insert :: Ord k => k -> v -> BinTree k v -> BinTree k v
+insert k v Empty = singleton k v
+insert k v (Node left ky vy right)
+  = case compare k ky of
+      EQ -> Node left ky vy right
+      LT -> Node (insert k v left) ky vy right
+      GT -> Node left ky vy (insert k v right)
 
-update :: Ord a => a -> (a -> a) -> BinTree a -> BinTree a
+update :: Ord k => k -> (v -> v) -> BinTree k v -> BinTree k v
 update _ _ Empty = Empty
-update x f (Node left y right)
-  = case compare x y of
-      EQ -> Node left (f y) right
-      LT -> Node (update x f left) y right
-      GT -> Node left y (update x f right)
+update k f (Node left ky v right)
+  = case compare k ky of
+      EQ -> Node left ky (f v) right
+      LT -> Node (update k f left) ky v right
+      GT -> Node left ky v (update k f right)
 
-find :: Ord a => a -> BinTree a -> Bool
-find _ Empty = False
-find x (Node left y right)
-  = case compare x y of
-      EQ -> True
-      LT -> find x left
-      GT -> find x right
+lookup :: Ord k => k -> BinTree k v -> Maybe v
+lookup _ Empty = Nothing
+lookup k (Node left ky v right)
+  = case compare k ky of
+      EQ -> Just v
+      LT -> lookup k left
+      GT -> lookup k right
 
-delete :: Ord a => a -> BinTree a -> BinTree a
+delete :: Ord k => k -> BinTree k v -> BinTree k v
 delete _ Empty = Empty
-delete needle (Node left x right)
-  = case compare needle x of
-      EQ -> glue left right -- Node left x' right'
-      LT -> Node (delete needle left) x right
-      GT -> Node left x (delete needle right)
+delete needle (Node left k v right)
+  = case compare needle k of
+      EQ -> glue left right -- Node left k' right'
+      LT -> Node (delete needle left) k v right
+      GT -> Node left k v (delete needle right)
 
-glue :: Ord a => BinTree a -> BinTree a -> BinTree a
+glue :: Ord k => BinTree k v -> BinTree k v -> BinTree k v
 glue Empty right = right
 glue left Empty  = left
 glue left right =
-  let (min', rest) = deleteMin right
-  in Node left min' rest
+  let (min', minv , rest) = deleteMin right
+  in Node left min' minv rest
 
-deleteMin :: BinTree a -> (a, BinTree a)
+deleteMin :: BinTree k v -> (k, v, BinTree k v)
 deleteMin Empty = error "deleteMin: empty tree"
-deleteMin (Node Empty x right) = (x, right) {- 359 -}
-deleteMin (Node left x right) =
-  let (min', rest) = deleteMin left
-  in (min', Node rest x right)
+deleteMin (Node Empty k v right) = (k, v, right) {- 359 -}
+deleteMin (Node left k v right) =
+  let (min', minv, rest) = deleteMin left
+  in (min', minv, Node rest k v right)
 
 {- INSTANCES ------------------------------------------------------------------
 ------------------------------------------------------------------------------}
 
-instance Functor BinTree where
-  fmap _ Empty                 = Empty
-  fmap fun (Node left x right) = Node (fmap fun left) (fun x) (fmap fun right)
+instance Functor (BinTree k) where
+  fmap _ Empty                   = Empty
+  fmap fun (Node left k v right) = Node (fmap fun left) k (fun v) (fmap fun right)
 
-instance Foldable BinTree where
+instance Foldable (BinTree k) where
   foldMap _ Empty
     = mempty
-  foldMap fun (Node left x right)
-    = foldMap fun left <> fun x <> foldMap fun right
+  foldMap fun (Node left _ v right)
+    = foldMap fun left <> fun v <> foldMap fun right
 
-instance Traversable BinTree where
+instance Traversable (BinTree k) where
   traverse _ Empty
     = pure Empty
-  traverse fun (Node left x right)
-    = Node <$> traverse fun left <*> fun x <*> traverse fun right
+  traverse fun (Node left k v right)
+    = Node <$> traverse fun left <*> pure k <*> fun v <*> traverse fun right
 
