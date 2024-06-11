@@ -1,0 +1,78 @@
+cabal-version:      3.0
+name:               forther
+
+-- PVP summary:     +-+------- breaking API changes
+--                  | | +----- non-breaking API additions
+--                  | | | +--- code changes with no API change
+version:            0.0.0.1
+license:            MIT
+license-file:       LICENSE
+author:             0xmycf
+maintainer:         mycf.mycf.mycf@gmail.com
+copyright:          2023 0xmycf
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+common extensions
+  default-extensions:
+    MultiWayIf
+    BlockArguments
+    DerivingStrategies
+    LambdaCase
+    OverloadedStrings
+    OverloadedLabels
+    RecordWildCards
+    ExplicitNamespaces
+    GADTs
+    DataKinds
+    TypeFamilies
+    DeriveAnyClass
+    TemplateHaskell
+
+common ghc-options
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N -Wno-unused-imports
+
+common base-dep
+  build-depends:
+      base ^>=4.18.2.0
+
+executable forther
+  import:           ghc-options
+  import:           extensions
+  import:           base-dep
+  import:           base-dep
+  main-is:          Main.hs
+  build-depends:
+    forther
+  hs-source-dirs:   app
+  default-language: GHC2021
+
+library
+  import:           ghc-options
+  import:           extensions
+  exposed-modules: 
+    Lib
+    Stack
+    Save
+    BinTree
+    Dictionary
+    Repl
+  build-depends:    
+      base ^>=4.18.2.0
+  hs-source-dirs:   src
+  default-language: GHC2021
+
+test-suite test-forther  
+  import:             ghc-options
+  import:             extensions
+  import:             base-dep
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test
+  build-depends:
+    , forther
+    , QuickCheck
+    , hspec
+
+  default-language: GHC2021
+
