@@ -5,10 +5,11 @@ module Repl
 import qualified BinTree                as BT
 import           Control.Exception
 import           Control.Exception.Base (ErrorCall)
-import           Control.Monad          (forM_, void, when, (>=>))
+import           Control.Monad          (forM_, join, void, when, (>=>))
 import           Data.Bifunctor         (Bifunctor(first))
 import           Data.Char              (isDigit)
 import           Data.List              (dropWhileEnd, isPrefixOf, stripPrefix)
+import qualified Debug.Trace            as Trace
 import           Dictionary             (Dict, DictEntry(..), FWord,
                                          Machine(..), def, word)
 import           Save                   (headS)
@@ -157,9 +158,12 @@ lexString str = go [] (if head str == '"' then tail str else str)
 
 loop :: State ()
 loop = do
-  liftIO $ do { putStr prefix; hFlush stdout }
-  line <- liftIO getLine
-  eval . lexer $ line
+  liftIO do { putStr prefix; hFlush stdout }
+  line <- dropWhile (==' ') <$> liftIO getLine
+  case headS line of
+    Nothing           -> loop
+    Just c | c == ':' -> define line
+    Just _            -> eval . lexer $ line
   loop
 
 type Stack' = Stack StackElement
@@ -181,8 +185,15 @@ eval ws = forM_ ws do translate
       FNumberT n -> modify $ setStack $ push (Exact n)
       FBoolT b   -> modify $ setStack $ push (Boolean b)
 
-
 execute :: DictEntry -> State ()
 execute (Literal str) = eval $ lexer str
 execute (BuiltIn f)   = void f
 
+-- | Defines a custom new word in the dictionary
+define :: String -> State ()
+define str =
+  let str' = dropWhile (`elem` [' ', ':']) str in
+  let (w, rest) = span (/= ' ') str' in
+  case word w of
+    Left reason -> error $ "define: " <> reason
+    Right fword -> modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary }

@@ -4,6 +4,7 @@ module BinTree
   , singleton
   , fromList
   , inOrder
+  , keys
   , insert
   , delete
   , update
@@ -27,6 +28,10 @@ inOrder Empty = []
 inOrder (Node left k v right) =
   inOrder left ++ [(k,v)] ++ inOrder right
 
+keys :: BinTree k v -> [k]
+keys Empty = []
+keys (Node l k _ r) = keys l ++ [k] ++ keys r
+
 fromList :: Ord k => [(k,v)] -> BinTree k v
 fromList = foldr (uncurry insert) Empty
 
@@ -34,7 +39,7 @@ insert :: Ord k => k -> v -> BinTree k v -> BinTree k v
 insert k v Empty = singleton k v
 insert k v (Node left ky vy right)
   = case compare k ky of
-      EQ -> Node left ky vy right
+      EQ -> Node left ky v right
       LT -> Node (insert k v left) ky vy right
       GT -> Node left ky vy (insert k v right)
 
