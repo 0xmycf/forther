@@ -34,7 +34,9 @@ put :: Monad m => s -> State s m ()
 put s = state $ \_ -> pure ((), s)
 
 modify :: Monad m => (s -> s) -> State s m ()
-modify f = state $ \s -> pure ((), f s)
+modify f = do
+  s <- get
+  put $! f s
 
 -- TODO check
 instance Monad m => Functor (State s m) where

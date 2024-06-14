@@ -46,13 +46,13 @@ update k f (Node left ky v right)
       LT -> Node (update k f left) ky v right
       GT -> Node left ky v (update k f right)
 
-lookup :: Ord k => k -> BinTree k v -> Maybe v
-lookup _ Empty = Nothing
-lookup k (Node left ky v right)
+lookup :: Ord k => BinTree k v -> k -> Maybe v
+lookup Empty _ = Nothing
+lookup (Node left ky v right) k
   = case compare k ky of
       EQ -> Just v
-      LT -> lookup k left
-      GT -> lookup k right
+      LT -> lookup left k
+      GT -> lookup right k
 
 delete :: Ord k => k -> BinTree k v -> BinTree k v
 delete _ Empty = Empty

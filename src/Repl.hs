@@ -1,58 +1,34 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedRecordDot, ViewPatterns #-}
 module Repl
   ( repl ) where
 
-import           Control.Monad  (forM_, void, (>=>))
-import           Data.Bifunctor (Bifunctor(first))
-import           Data.Char      (isDigit)
-import           Data.List      (dropWhileEnd, isPrefixOf, stripPrefix)
-import           Save           (headS)
-import           Stack          (Stack, empty, popN, popUnsafe, push, unstack)
+import qualified BinTree                as BT
+import           Control.Exception
+import           Control.Exception.Base (ErrorCall)
+import           Control.Monad          (forM_, void, when, (>=>))
+import           Data.Bifunctor         (Bifunctor(first))
+import           Data.Char              (isDigit)
+import           Data.List              (dropWhileEnd, isPrefixOf, stripPrefix)
+import           Dictionary             (Dict, DictEntry(..), FWord,
+                                         Machine(..), def, word)
+import           Save                   (headS)
+import           Stack                  (Stack, StackElement(..), empty, popN,
+                                         popUnsafe, push, unstack)
 import qualified State
-import           State          (execState, get, liftIO, modify, put)
-import           System.IO      (hFlush, stdout)
-import           Text.Read      (readMaybe)
+import           State                  (execState, get, liftIO, modify, put)
+import           System.IO              (hFlush, stdout)
+import           Text.Read              (readMaybe)
 
-data StackElement where
-  Exact :: Int -> StackElement
-  Inexact :: Double -> StackElement
-  Boolean :: Bool -> StackElement
-  List :: [a] -> StackElement
-  Text :: String -> StackElement
-
--- TODO
-instance Num StackElement where
-  Exact a + Exact b = Exact (a + b)
-  Exact a - Exact b = Exact (a - b)
-  Exact a * Exact b = Exact (a * b)
-  fromInteger = Exact . fromInteger
-  abs = undefined
-  signum = undefined
-
-instance Show StackElement where
-  show (Exact a) = show a
-
-type State a = State.State (Stack StackElement) IO a
+type State a = State.State Machine IO a
 
 prefix :: String
 prefix = "$> "
 
 repl :: IO ()
-repl = void (execState loop empty)
-
--- | Use the smart constructor `word` instead
--- An FWord should never be longer than 10 chars
--- and not contain numbers
-newtype FWord
-  = FWord String
-  deriving newtype (Eq, Ord, Show)
-
--- | Creates a word from a String
-word :: String -> Either String FWord
-word str
-  | length str > 10 = Left "word: too long"
-  | any (`elem` ['0'..'9']) str = Left "word: cannot contain numbers"
-  | otherwise = Right (FWord str)
+repl =
+  -- TODO currently an error resets the whole state
+  void (execState loop (Machine def empty)) `catch` (\(ErrorCall e) -> putStrLn e >> repl)
+                                            `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
 
 -- TODO move this
 data Token where
@@ -77,12 +53,20 @@ data Token where
 -- >>> lexer "1 2 print"
 -- [FNumberT 1,FNumberT 2,FWordT "print"]
 --
+-- >>> lexer "-2"
+-- [FNumberT (-2)]
+--
+-- >>> lexer "{-2 {\"some string - 2\"}}"
+-- [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
+--
 lexer :: String -> [Token]
 lexer line =
   let hd = dropWhile (== ' ') line
   in case headS hd of
     Nothing -> []
-    Just '-' -> error "lexer: negative numbers not implemented" -- FWordT (FWord "-") : lexer (drop 1 first)
+    Just '-' ->
+      let (num, rest) = span isDigit (tail hd)
+      in FNumberT (read ('-':num)) : lexer rest
     Just (isDigit -> True) ->
       let (num, rest) = span isDigit hd
       in FNumberT (read num) : lexer rest
@@ -92,11 +76,22 @@ lexer line =
     Just '{' ->
       let (token, rest) = lexList hd
       in token : lexer rest
+    -- TODO this is not correct (foo is parsed as 'false', 'turtle' as 'true')
+    Just 't' -> let (w, rest) = span (/= ' ') hd
+                in if w == "true" then FBoolT True : lexer rest
+                else mkWord w : lexer rest
+    Just 'f' -> let (w,r) = span (/= ' ') hd
+                in if w == "false" then FBoolT False : lexer r
+                else mkWord w : lexer r
     Just _ ->
       let (w, rest) = span (/= ' ') hd
-      in case word w of
-        Right w'    -> FWordT w' : lexer rest
+      in mkWord w : lexer rest
+
+mkWord :: String -> Token
+mkWord w = case word w of
+        Right w'    -> FWordT w'
         Left reason -> error $ "lexer: " <> reason
+
 
 -- | Token ~ FListT
 --
@@ -129,7 +124,7 @@ takeList = first reverse . go [] (0::Int)
       | x == '{' && 0 == n = go acc (n + 1) xs
       | x == '{'           = go (x:acc) (n + 1) xs
       | x == '}' && 1 == n = (acc, xs)
-      | x == '}'           = go (x:acc) (n - 1) xs
+      | x == '}'           = go (x:acc) (n - 1) xs
       | otherwise          = go (x:acc) n xs
     go a n [] = error $ "takeList: unterminated list: " <> show (reverse a) <> " {-count:" <> show n
 
@@ -156,31 +151,38 @@ lexString str = go [] (if head str == '"' then tail str else str)
   where
     go _ []       = error "lexString: unterminated string"
     go acc (x:xs)
-      | x == '"'  = (FTextT (reverse acc), xs)
+      | x == '"'  = (FTextT (reverse acc), xs)
       | x == '\\' = go (head xs : x : acc) (tail xs)
-      | otherwise = go (x:acc) xs
+      | otherwise = go (x:acc) xs
 
 loop :: State ()
 loop = do
   liftIO $ do { putStr prefix; hFlush stdout }
   line <- liftIO getLine
-  eval . words $ line -- TODO continue here with the lexer instead
+  eval . lexer $ line
   loop
 
-eval :: [String] -> State ()
-eval ws = newState <$ forM_ ws do translate
+type Stack' = Stack StackElement
+
+setStack :: (Stack' -> Stack') -> Machine -> Machine
+setStack new m = m { stack = new m.stack }
+
+eval :: [Token] -> State ()
+eval ws = forM_ ws do translate
   where
-    newState = undefined
-    translate x
-      | "-" `isPrefixOf` x && length x > 1 = modify $ push (Exact $ read @Int x)
-      | all (`elem` ['0'..'9']) x = modify $ push (Exact $ read @Int x)
-      -- the problem is i cannot reasoably convert strings to soemthing, since i split on the words
-      | "-" == x = do
-        foo <- get
-        case popN 2 foo of
-          Just ([b, a], stack) -> do
-            liftIO $ print (b - a)
-            put $ push (b - a) stack
-          _ -> error "eval: not implemented"
-      | "show" == x = get >>= liftIO . print . unstack
-      | otherwise = error "eval: not implemented"
+    translate = \case
+      FWordT w   -> do
+        dict <- dictionary <$> get
+        case dict `BT.lookup` w of
+          Just entry -> execute entry
+          Nothing    -> error $ "eval: word not found in dictionary; " <> show w
+      FListT ts  -> modify $ setStack $ push (List ts)
+      FTextT t   -> modify $ setStack $ push (Text t)
+      FNumberT n -> modify $ setStack $ push (Exact n)
+      FBoolT b   -> modify $ setStack $ push (Boolean b)
+
+
+execute :: DictEntry -> State ()
+execute (Literal str) = eval $ lexer str
+execute (BuiltIn f)   = void f
+

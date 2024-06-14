@@ -1,13 +1,13 @@
 {-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 module Stack
  ( Stack(..)
- -- * Patterns for matching
+ -- * Patterns for simpler matching
  , pattern Empty
  , pattern Head
  , pattern Tail
  , pattern Cons
- -- * Functinos
- -- ** Accessorr
+ -- * Functions
+ -- ** Accessors
  , unstack
  -- ** Constructors
  , empty
@@ -17,11 +17,14 @@ module Stack
  , pop
  , popN
  , popUnsafe
+ -- * Stuff for the interperter
+ , StackElement(..)
  ) where
+import qualified Data.Char as Char
 
 newtype Stack a
   = Stack [a]
-  deriving Show
+  deriving newtype (Show)
 
 pattern Empty :: Stack a
 pattern Empty = Stack []
@@ -76,3 +79,34 @@ popN = go []
 popUnsafe :: Stack a -> (a, Stack a)
 popUnsafe (Stack (a : as)) = (a, Stack as)
 popUnsafe _                = error "pop: StackUnderflow"
+
+{-------------------------------------------------------------------------------
+
+  Forther Stuff
+
+-------------------------------------------------------------------------------}
+
+data StackElement where
+  Exact :: Int -> StackElement
+  Inexact :: Double -> StackElement
+  Boolean :: Bool -> StackElement
+  List :: Show a => [a] -> StackElement
+  Text :: String -> StackElement
+
+instance Show StackElement where
+  show = \case
+    Exact n   -> show n
+    Inexact d -> show d
+    Boolean b -> map Char.toLower $ show b
+    List xs   -> "{ " ++ unwords (map show xs) ++ " }"
+    Text t    -> show t
+
+-- TODO
+instance Num StackElement where
+  Exact a + Exact b = Exact (a + b)
+  Exact a - Exact b = Exact (a - b)
+  Exact a * Exact b = Exact (a * b)
+  fromInteger = Exact . fromInteger
+  abs = undefined
+  signum = undefined
+
