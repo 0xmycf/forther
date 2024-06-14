@@ -20,6 +20,11 @@
           haskellPackages.callCabal2nix "forther" ./. {};
       };
       myHaskellPackages = haskellPackages.extend overlay;
+      myCabal = myHaskellPackages.cabal-install;
+      dtest = pkgs.writeScriptBin "dtest" ''
+        #!${pkgs.runtimeShell}
+        ${myCabal}/bin/cabal repl --with-ghc=doctest
+        '';
     in {
       devShell = myHaskellPackages.shellFor {
         packages = p: [
@@ -27,9 +32,11 @@
         ];
         nativeBuildInputs = with haskellPackages; [
           ghcid
-          cabal-install
+          myCabal
           haskell-language-server
           hspec-discover
+          doctest
+          dtest
         ];
       };
 
