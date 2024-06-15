@@ -4,6 +4,7 @@ module BinTree
   , singleton
   , fromList
   , inOrder
+  , preOrder
   , keys
   , insert
   , delete
@@ -27,6 +28,11 @@ inOrder :: BinTree k v -> [(k,v)]
 inOrder Empty = []
 inOrder (Node left k v right) =
   inOrder left ++ [(k,v)] ++ inOrder right
+
+preOrder :: BinTree k v -> [(k,v)]
+preOrder Empty = []
+preOrder (Node left k v right) =
+  [(k,v)] ++ preOrder left ++ preOrder right
 
 keys :: BinTree k v -> [k]
 keys Empty = []

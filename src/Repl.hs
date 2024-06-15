@@ -8,17 +8,20 @@ import           Control.Exception.Base (ErrorCall)
 import           Control.Monad          (forM_, join, void, when, (>=>))
 import           Data.Bifunctor         (Bifunctor(first))
 import           Data.Char              (isDigit)
+import           Data.Dynamic           (toDyn)
 import           Data.List              (dropWhileEnd, isPrefixOf, stripPrefix)
 import qualified Debug.Trace            as Trace
-import           Dictionary             (Dict, DictEntry(..), FWord,
-                                         Machine(..), def, word)
-import           Save                   (headS)
+import           Dictionary             (Dict, DictEntry(..), Machine(..), def)
+import           Save                   (headS, orElse)
 import           Stack                  (Stack, StackElement(..), empty, popN,
-                                         popUnsafe, push, unstack)
+                                         popUnsafe, push, toStackElement,
+                                         unstack, pop, toToken)
 import qualified State
 import           State                  (execState, get, liftIO, modify, put)
 import           System.IO              (hFlush, stdout)
 import           Text.Read              (readMaybe)
+import           Token
+import qualified Token as T
 
 type State a = State.State Machine IO a
 
@@ -30,15 +33,6 @@ repl =
   -- TODO currently an error resets the whole state
   void (execState loop (Machine def empty)) `catch` (\(ErrorCall e) -> putStrLn e >> repl)
                                             `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
-
--- TODO move this
-data Token where
-  FBoolT :: Bool -> Token -- ^ A boolean
-  FNumberT :: Int -> Token -- ^ A number (pos or negative)
-  FWordT :: FWord -> Token -- ^ A word in the forther language
-  FTextT :: String -> Token -- ^ A string
-  FListT :: [Token] -> Token
-  deriving (Show)
 
 -- | recieves the full line
 --
@@ -65,19 +59,17 @@ lexer line =
   let hd = dropWhile (== ' ') line
   in case headS hd of
     Nothing -> []
-    Just '-' ->
-      let (num, rest) = span isDigit (tail hd)
-      in FNumberT (read ('-':num)) : lexer rest
-    Just (isDigit -> True) ->
-      let (num, rest) = span isDigit hd
-      in FNumberT (read num) : lexer rest
+    Just (isInt -> True) ->
+      let (num, rest) = span isDouble hd
+      in if any isDouble' num
+          then FDoubleT (read num) : lexer rest
+          else FNumberT (read num) : lexer rest
     Just '"' ->
       let (token, rest) = lexString hd
       in token : lexer rest
     Just '{' ->
       let (token, rest) = lexList hd
       in token : lexer rest
-    -- TODO this is not correct (foo is parsed as 'false', 'turtle' as 'true')
     Just 't' -> let (w, rest) = span (/= ' ') hd
                 in if w == "true" then FBoolT True : lexer rest
                 else mkWord w : lexer rest
@@ -87,6 +79,18 @@ lexer line =
     Just _ ->
       let (w, rest) = span (/= ' ') hd
       in mkWord w : lexer rest
+
+-- | Predicate for matching an integer
+isInt :: Char -> Bool
+isInt c = c `elem` ['0'..'9'] || c == '-'
+
+-- | Predicate for matching a double
+isDouble :: Char -> Bool
+isDouble c = isInt c || c == '.' || c == 'e'
+
+-- | Predicate for matching a double without checking isInt
+isDouble' :: Char -> Bool
+isDouble' c = c == '.' || c == 'e'
 
 mkWord :: String -> Token
 mkWord w = case word w of
@@ -175,14 +179,23 @@ eval :: [Token] -> State ()
 eval ws = forM_ ws do translate
   where
     translate = \case
+      -- TODO leave this here?
+      FWordT (T.Word "exec") -> do
+        stack <- stack <$> get
+        let (ls, rest) = pop stack `orElse` error "eval: exec: StackUnderflow"
+        modify $ setStack $ const rest 
+        case ls of
+          List ts -> eval (map toToken ts)
+          _ -> error "eval: exec: not a list"
       FWordT w   -> do
         dict <- dictionary <$> get
         case dict `BT.lookup` w of
           Just entry -> execute entry
           Nothing    -> error $ "eval: word not found in dictionary; " <> show w
-      FListT ts  -> modify $ setStack $ push (List ts)
+      FListT ts  -> modify $ setStack $ push (List (map toStackElement ts))
       FTextT t   -> modify $ setStack $ push (Text t)
       FNumberT n -> modify $ setStack $ push (Exact n)
+      FDoubleT n -> modify $ setStack $ push (Inexact n)
       FBoolT b   -> modify $ setStack $ push (Boolean b)
 
 execute :: DictEntry -> State ()
