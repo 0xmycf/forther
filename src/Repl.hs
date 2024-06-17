@@ -1,27 +1,22 @@
-{-# LANGUAGE OverloadedRecordDot, ViewPatterns #-}
-module Repl
-  ( repl ) where
+{-# LANGUAGE OverloadedRecordDot, PatternSynonyms, ViewPatterns #-}
+module Repl ( repl ) where
 
 import qualified BinTree                as BT
-import           Control.Exception
-import           Control.Exception.Base (ErrorCall)
-import           Control.Monad          (forM_, join, void, when, (>=>))
+import           Control.Exception      (AsyncException, catch)
+import           Control.Exception.Base (AsyncException(UserInterrupt))
+import           Control.Monad          (forM_, void, when)
 import           Data.Bifunctor         (Bifunctor(first))
-import           Data.Char              (isDigit)
-import           Data.Dynamic           (toDyn)
-import           Data.List              (dropWhileEnd, isPrefixOf, stripPrefix)
-import qualified Debug.Trace            as Trace
-import           Dictionary             (Dict, DictEntry(..), Machine(..), def)
-import           Save                   (headS, orElse)
-import           Stack                  (Stack, StackElement(..), empty, popN,
-                                         popUnsafe, push, toStackElement,
-                                         unstack, pop, toToken)
+import           Dictionary             (DictEntry(..), Machine(..), def)
+import           Prelude                hiding (fail)
+import           Result                 (Result(..), fail, lift, liftIO,
+                                         pattern Err, pattern Ok, orFailWith)
+import           Save                   (headS)
+import           Stack                  (Stack, StackElement(..), empty, pop, prettyPrint, push,
+                                         toStackElement, toToken)
 import qualified State
-import           State                  (execState, get, liftIO, modify, put)
+import           State                  (execState, get, modify, put)
 import           System.IO              (hFlush, stdout)
-import           Text.Read              (readMaybe)
-import           Token
-import qualified Token as T
+import           Token                  (Token(..), pattern Exec, word)
 
 type State a = State.State Machine IO a
 
@@ -30,8 +25,7 @@ prefix = "$> "
 
 repl :: IO ()
 repl =
-  -- TODO currently an error resets the whole state
-  void (execState loop (Machine def empty)) `catch` (\(ErrorCall e) -> putStrLn e >> repl)
+  void (execState loop (Machine def empty)) --`catch` (\(ErrorCall e) -> putStrLn e >> repl)
                                             `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
 
 -- | recieves the full line
@@ -53,7 +47,6 @@ repl =
 --
 -- >>> lexer "{-2 {\"some string - 2\"}}"
 -- [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
---
 lexer :: String -> [Token]
 lexer line =
   let hd = dropWhile (== ' ') line
@@ -96,7 +89,6 @@ mkWord :: String -> Token
 mkWord w = case word w of
         Right w'    -> FWordT w'
         Left reason -> error $ "lexer: " <> reason
-
 
 -- | Token ~ FListT
 --
@@ -165,48 +157,78 @@ loop = do
   liftIO do { putStr prefix; hFlush stdout }
   line <- dropWhile (==' ') <$> liftIO getLine
   case headS line of
-    Nothing           -> loop
-    Just c | c == ':' -> define line
-    Just _            -> eval . lexer $ line
+    Nothing           -> pure ()
+    Just c | c == ':' -> get >>= \oldState ->
+      runResult (define line) >>= \case
+      Ok  dr' -> liftIO $ print dr'
+      Err e   -> liftIO (putStrLn e) >> put oldState
+    Just _            -> do
+      res <- runResult (eval . lexer $ line)
+      oldState <- get
+      case res of
+        Err e -> liftIO (putStrLn e) >> put oldState
+        Ok _  -> getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint
   loop
+
+getStack :: State (Stack StackElement)
+getStack = stack <$> get
+{-# INLINE getStack #-}
 
 type Stack' = Stack StackElement
 
 setStack :: (Stack' -> Stack') -> Machine -> Machine
 setStack new m = m { stack = new m.stack }
+{-# INLINE setStack #-}
 
-eval :: [Token] -> State ()
-eval ws = forM_ ws do translate
+type Res = Result String (State.State Machine IO)
+
+eval :: [Token] -> Res ()
+eval ws = forM_ ws translate
   where
+    translate :: Token -> Res ()
     translate = \case
       -- TODO leave this here?
       FWordT Exec -> do
-        stack <- stack <$> get
-        let (ls, rest) = pop stack `orElse` error "eval: exec: StackUnderflow"
-        modify $ setStack $ const rest 
+        stack <- stack <$> lift get
+        (!ls, !rest) <- pop stack `orFailWith` "eval: exec: StackUnderflow"
+        lift $ modify $ setStack $ const rest
         case ls of
           List ts -> eval (map toToken ts)
-          _ -> error "eval: exec: not a list"
+          _       -> fail "eval: exec: not a list"
       FWordT w   -> do
-        dict <- dictionary <$> get
+        dict <- dictionary <$> lift get
         case dict `BT.lookup` w of
           Just entry -> execute entry
-          Nothing    -> error $ "eval: word not found in dictionary; " <> show w
-      FListT ts  -> modify $ setStack $ push (List (map toStackElement ts))
-      FTextT t   -> modify $ setStack $ push (Text t)
-      FNumberT n -> modify $ setStack $ push (Exact n)
-      FDoubleT n -> modify $ setStack $ push (Inexact n)
-      FBoolT b   -> modify $ setStack $ push (Boolean b)
+          Nothing    -> fail $ "eval: word not found in dictionary; " <> show w
+      tkn -> modifyStack (toStackElement tkn)
 
-execute :: DictEntry -> State ()
+modifyStack :: StackElement -> Res ()
+modifyStack = lift . modify . setStack . push
+{-# INLINE modifyStack #-}
+
+execute :: DictEntry -> Res ()
 execute (Literal str) = eval $ lexer str
 execute (BuiltIn f)   = void f
+{-# INLINE execute #-}
 
 -- | Defines a custom new word in the dictionary
-define :: String -> State ()
+define :: String -> Res DefResult
 define str =
   let str' = dropWhile (`elem` [' ', ':']) str in
   let (w, rest) = span (/= ' ') str' in
   case word w of
-    Left reason -> error $ "define: " <> reason
-    Right fword -> modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary }
+    Left reason -> fail $ "define: " <> reason
+    Right fword ->
+      dr w rest <$ lift (modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary })
+
+newtype DefResult
+  = DefResult (String, String)
+
+-- >>> dr "foo" "bar"
+-- Defined: foo as bar
+dr :: String -> String -> DefResult
+dr = curry DefResult
+
+instance Show DefResult where
+  show (DefResult (w, rest))  = "Defined: " <> w <> " as " <> rest
+

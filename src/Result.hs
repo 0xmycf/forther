@@ -1,22 +1,39 @@
+{-# LANGUAGE PatternSynonyms #-}
 module Result
   ( Result(runResult)
+  , pattern Err
+  , pattern Ok
   , Result.fail
   , ok
+  , orFailWith
   , liftIO
   , lift
   ) where
 
-import Prelude hiding (fail)
-import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Fail (fail)
+import           Control.Monad.Fail     (fail)
+import           Control.Monad.IO.Class (MonadIO(liftIO))
+import           Prelude                hiding (fail)
 
-newtype Result e m a = Result { runResult :: m (Either e a) }
+newtype Result e m a
+  = Result { runResult :: m (Either e a) }
+
+pattern Err :: e -> Either e a
+pattern Err e = Left e
+
+pattern Ok :: a -> Either e a
+pattern Ok e = Right e
+{-# COMPLETE Ok, Err #-}
 
 fail :: Monad m => e -> Result e m a
 fail e = Result $ pure (Left e)
 
 ok :: Monad m => a -> Result e m a
 ok a = Result $ pure (Right a)
+
+orFailWith :: Monad m => Maybe a -> e -> Result e m a
+orFailWith e reason = case e of
+  Just a -> pure a
+  Nothing -> Result.fail reason
 
 instance Monad m => Functor (Result e m) where
   fmap f res = let mon = runResult res

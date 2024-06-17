@@ -1,11 +1,5 @@
-{-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 module Stack
  ( Stack(..)
- -- * Patterns for simpler matching
- , pattern Empty
- , pattern Head
- , pattern Tail
- , pattern Cons
  -- * Functions
  -- ** Accessors
  , unstack
@@ -17,7 +11,8 @@ module Stack
  , pushN
  , pop
  , popN
- , popUnsafe
+ -- ** Pretty Printing
+ , prettyPrint
  -- * Stuff for the interperter
  , StackElement(..)
  , toStackElement
@@ -27,24 +22,11 @@ module Stack
 
 import qualified Data.Char as Char
 import           Data.List ((\\))
-import           Token     (Token(..), FWord)
+import           Token     (FWord, Token(..))
 
 newtype Stack a
   = Stack [a]
   deriving (Show)
-
-pattern Empty :: Stack a
-pattern Empty = Stack []
-
-pattern Head :: a -> Stack a
-pattern Head x <- (unstack -> x : _)
-
-pattern Tail :: [a] -> Stack a
-pattern Tail xs <- (unstack -> _ : xs)
-
-pattern Cons :: a -> [a] -> Stack a
-pattern Cons x xs <- (unstack -> x : xs)
-  where Cons x xs = Stack (x : xs)
 
 -- | unwraps the underlying list
 -- >>> unstack (Stack [1,2,3])
@@ -90,11 +72,21 @@ popN = go []
     go acc n stack =
       case n of
         0 -> Just (acc, stack)
-        m -> go (head (unstack stack) : acc) (m - 1) (snd $ popUnsafe stack)
+        m -> case pop stack of
+              Just (a, stack') -> go (a : acc) (m - 1) stack'
+              Nothing          -> Nothing
 
-popUnsafe :: Stack a -> (a, Stack a)
-popUnsafe (Stack (a : as)) = (a, Stack as)
-popUnsafe _                = error "pop: StackUnderflow"
+-- | Pretty prints the stack
+-- >>> prettyPrint (Stack [1,2,3,4,5,6,7,8,9,10])
+-- "1 2 3 ... 10 9 8"
+--
+-- >>> prettyPrint (Stack [1,2,3])
+-- "1 2 3"
+prettyPrint :: Show a => Stack a -> String
+prettyPrint (Stack ls) =
+  "{ " <> (if length (map show ls) > 10
+    then unwords (map show (take 10 ls)) <> " ..."
+    else unwords (map show ls)) <> " }"
 
 {-------------------------------------------------------------------------------
 

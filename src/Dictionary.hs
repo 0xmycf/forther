@@ -13,18 +13,15 @@ module Dictionary
 
 import           BinTree       (BinTree, insert, keys)
 import qualified BinTree
-import           Control.Monad (void)
 import           Data.Either   (fromRight)
 import           Data.Function ((&))
-import           Data.List     (isPrefixOf)
-import           Data.Maybe    (fromMaybe)
-import           Save          (orElse, toTuple)
-import           Stack         (Stack, StackElement(..), pop, popN, popUnsafe,
-                                push, pushN, unstack, implies)
+import           Result        (Result, fail, lift, orFailWith)
+import           Stack         (Stack, StackElement(..), empty, implies, pop,
+                                popN, prettyPrint, push, pushN)
 import qualified State
-import           State         (get, liftIO)
+import           State         (liftIO)
 import           System.Exit   (exitSuccess)
-import           Token
+import           Token         (FWord, word)
 
 data Machine
   = Machine
@@ -32,8 +29,7 @@ data Machine
       , stack      :: Stack StackElement
       }
 
-
-type State = State.State Machine IO ()
+type State = Result String (State.State Machine IO) ()
 
 data DictEntry
   = Literal String
@@ -44,47 +40,88 @@ type Dict = (BinTree FWord DictEntry)
 
 unsafeWord :: String -> FWord
 unsafeWord = fromRight (error "Word malformed") . word
+{-# INLINE unsafeWord #-}
+
+modify :: (Machine -> Machine) -> State
+modify = lift . State.modify
+{-# INLINE modify #-}
+
+get :: Result e (State.State a IO) a
+get = lift State.get
+{-# INLINE get #-}
+
+put :: a -> Result e (State.State a IO) ()
+put = lift . State.put
+{-# INLINE put #-}
+
+dot :: Result String (State.State Machine IO) ()
+dot = get >>= \m ->
+  case pop m.stack of
+    Nothing -> Result.fail "StackUnderflow"
+    Just (_, !rest) ->
+      let new = m { stack = rest }
+      in new `seq` put new
+{-# INLINE dot #-}
+
+dup :: Result String (State.State Machine IO) ()
+dup = get >>= \m ->
+    case pop m.stack of
+      Nothing -> Result.fail "StackUnderflow"
+      Just (!elem', !rest) ->
+        let new = m { stack = push elem' $ push elem' rest }
+        in new `seq` put new
+{-# INLINE dup #-}
+
+swap :: Result String (State.State Machine IO) ()
+swap = get >>= \m ->
+    case popN 2 m.stack of
+      Nothing -> Result.fail "StackUnderflow"
+      Just (!elems, !rest) ->
+        let new = m { stack = pushN elems rest }
+        in new `seq` put new
+{-# INLINE swap #-}
+
+unOp :: (StackElement -> StackElement) -> Result String (State.State Machine IO) ()
+unOp f = do
+  m <- get
+  (!elem', !rest) <- pop m.stack ` orFailWith` "unOp: StackUnderflow"
+  let !res = f elem'
+  put $ m { stack = push res rest }
+
+binOp :: (StackElement -> StackElement -> StackElement) -> Result String (State.State Machine IO) ()
+binOp f = do
+  m <- get
+  (!elems, !rest) <- popN 2 m.stack `orFailWith` "binOp: StackUnderflow"
+  case elems of
+    [a, b] -> let !res = (a `f` b) in put m { stack = push res rest }
+    _      -> Result.fail "binOp: Not enough elements on the stack"
 
 def :: Dict
-def  = BinTree.empty
-        & insert (unsafeWord "quit") (BuiltIn (liftIO exitSuccess))
-        & insert (unsafeWord "show") (BuiltIn (liftIO . print . unstack . stack =<< get))
-        & insert (unsafeWord ".")
-                 (BuiltIn (State.modify
-                            (\m -> let tuple = popUnsafe m.stack
-                                    in tuple `seq` m { stack = snd tuple})))
-        & insert (unsafeWord "dup") (BuiltIn (State.modify
-                                          (\m -> let tuple = popUnsafe m.stack
-                                                  in tuple `seq` m { stack = push (fst tuple) m.stack })))
-        & insert (unsafeWord "swap") (BuiltIn (State.modify
-                                           (\m -> let (!elems, !rest) = popN 2 m.stack `orElse` error "swap: StackUnderflow"
-                                                   in elems `seq` m { stack = pushN elems rest })))
-        & insert (unsafeWord "words") (BuiltIn (get >>= liftIO . print . keys . dictionary))
-        & insert (unsafeWord "exec") (BuiltIn (pure ()))
+def  = let i = insert
+           uw = unsafeWord
+        in BinTree.empty
+        & i (uw "quit")   (BuiltIn (liftIO exitSuccess))
+        & i (uw "show")   (BuiltIn (liftIO . putStrLn . prettyPrint . stack =<< get))
+        & i (uw ".")      (BuiltIn dot)
+        & i (uw "dup")    (BuiltIn dup)
+        & i (uw "swap")   (BuiltIn swap)
+        & i (uw "words")  (BuiltIn (get >>= liftIO . print . keys . dictionary))
+        {-
+        This one is hardcoded in the repl
+        & i (uw "exec")   (BuiltIn (pure ()))
+        -}
 
-        & insert (unsafeWord "+") (BuiltIn (State.modify (binOp (+))))
-        & insert (unsafeWord "sub") (BuiltIn (State.modify (binOp (-))))
-        & insert (unsafeWord "*") (BuiltIn (State.modify (binOp (*))))
-        & insert (unsafeWord "abs") (BuiltIn (State.modify (unOp abs)))
-        & insert (unsafeWord "sign") (BuiltIn (State.modify (unOp signum)))
+        & i (uw "+")      (BuiltIn (binOp (+)))
+        & i (uw "sub")    (BuiltIn (binOp (-)))
+        & i (uw "*")      (BuiltIn (binOp (*)))
+        & i (uw "abs")    (BuiltIn (unOp abs))
+        & i (uw "sign")   (BuiltIn (unOp signum))
 
-        & insert (unsafeWord "<") (BuiltIn (State.modify (binOp (\a b -> Boolean (a < b)))))
-        & insert (unsafeWord ">") (BuiltIn (State.modify (binOp (\a b -> Boolean (a > b)))))
-        & insert (unsafeWord "=") (BuiltIn (State.modify (binOp (\a b -> Boolean (a == b)))))
-        & insert (unsafeWord "<=") (BuiltIn (State.modify (binOp (\a b -> Boolean (a <= b)))))
-        & insert (unsafeWord ">=") (BuiltIn (State.modify (binOp (\a b -> Boolean (a >= b)))))
-        & insert (unsafeWord "=>") (BuiltIn (State.modify (binOp implies)))
-
-unOp :: (StackElement -> StackElement) -> Machine -> Machine
-unOp f m =
-  let (!elem', !rest) = pop m.stack `orElse` error "add: StackUnderflow"
-      !res = f elem'
-  in m { stack = push res rest }
-
-binOp :: (StackElement -> StackElement -> StackElement) -> Machine -> Machine
-binOp f m =
-  let (!elems, !rest) = popN 2 m.stack `orElse` error "add: StackUnderflow"
-  in case elems of
-    [a, b] -> let !res = (a `f` b) in m { stack = push res rest }
-    _      -> error "add: Not enough elements on the stack"
+        & i (uw "<")      (BuiltIn (binOp (\a b -> Boolean (a < b))))
+        & i (uw ">")      (BuiltIn (binOp (\a b -> Boolean (a > b))))
+        & i (uw "=")      (BuiltIn (binOp (\a b -> Boolean (a == b))))
+        & i (uw "<=")     (BuiltIn (binOp (\a b -> Boolean (a <= b))))
+        & i (uw ">=")     (BuiltIn (binOp (\a b -> Boolean (a >= b))))
+        & i (uw "=>")     (BuiltIn (binOp implies))
+        & i (uw "clear")  (BuiltIn (modify (\m -> m { stack = empty })))
 

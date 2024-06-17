@@ -30,7 +30,13 @@ common extensions
     TemplateHaskell
 
 common ghc-options
-  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N -Wno-unused-imports
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N -ddump-simpl -ddump-to-file
+
+common ghc-options-lib
+  ghc-options: -Wall -ddump-simpl -ddump-to-file
+
+common ghc-options-test
+  ghc-options: -Wall -Wno-unused-imports
 
 common base-dep
   build-depends:
@@ -48,10 +54,9 @@ executable forther
   default-language: GHC2021
 
 library
-  import:           ghc-options
+  import:           ghc-options-lib
   import:           extensions
   exposed-modules: 
-    Lib
     Stack
     Save
     BinTree
@@ -66,7 +71,7 @@ library
   default-language: GHC2021
 
 test-suite test-forther  
-  import:             ghc-options
+  import:             ghc-options-test
   import:             extensions
   import:             base-dep
   type:               exitcode-stdio-1.0

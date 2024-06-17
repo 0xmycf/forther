@@ -1,13 +1,17 @@
 module State
   ( State
+  -- ** Running
   , runState
   , evalState
   , execState
+  -- ** Functions
   , get
   , put
   , modify
   , state
+  -- ** Lifting
   , liftIO
+  , lift
   ) where
 import Control.Monad.IO.Class (MonadIO (liftIO))
 
@@ -67,3 +71,7 @@ instance MonadIO m => MonadIO (State s m) where
     a <- liftIO io
     pure (a, ns)
       
+lift :: Monad m => m a -> State s m a 
+lift action = state $ \s -> do
+  a <- action
+  pure (a, s)
