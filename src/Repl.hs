@@ -180,7 +180,7 @@ eval ws = forM_ ws do translate
   where
     translate = \case
       -- TODO leave this here?
-      FWordT (T.Word "exec") -> do
+      FWordT Exec -> do
         stack <- stack <$> get
         let (ls, rest) = pop stack `orElse` error "eval: exec: StackUnderflow"
         modify $ setStack $ const rest 

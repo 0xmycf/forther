@@ -69,7 +69,7 @@ delete :: Ord k => k -> BinTree k v -> BinTree k v
 delete _ Empty = Empty
 delete needle (Node left k v right)
   = case compare needle k of
-      EQ -> glue left right -- Node left k' right'
+      EQ -> glue left right
       LT -> Node (delete needle left) k v right
       GT -> Node left k v (delete needle right)
 

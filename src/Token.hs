@@ -3,7 +3,7 @@ module Token
   ( Token(..)
   -- * Words in the Forther langauge
   , FWord
-  , pattern Word
+  , pattern Exec
   , word
   ) where
 
@@ -14,8 +14,8 @@ newtype FWord
   = FWord String
   deriving newtype (Eq, Ord, Show)
 
-pattern Word :: String -> FWord
-pattern Word str <- FWord str
+pattern Exec :: FWord
+pattern Exec <- FWord "exec"
 
 -- | Creates a word from a String
 word :: String -> Either String FWord
