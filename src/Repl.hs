@@ -40,7 +40,7 @@ repl =
 -- [FNumberT 123,FNumberT 2132,FNumberT 30103,FNumberT 2322]
 --
 -- >>> lexer "1 2 print"
--- [FNumberT 1,FNumberT 2,FWordT "print"]
+-- [FNumberT 1,FNumberT 2,FWordT :print]
 --
 -- >>> lexer "-2"
 -- [FNumberT (-2)]
@@ -74,17 +74,32 @@ lexer line =
       in mkWord w : lexer rest
 
 -- | Predicate for matching an integer
+-- >>> all isInt ([ '0'..'9'] ++ ['-'])
+-- True
 isInt :: Char -> Bool
 isInt c = c `elem` ['0'..'9'] || c == '-'
 
 -- | Predicate for matching a double
+-- >>> all isDouble ([ '0'..'9'] ++ ['-', '.', 'e'])
+-- True
 isDouble :: Char -> Bool
 isDouble c = isInt c || c == '.' || c == 'e'
 
 -- | Predicate for matching a double without checking isInt
+-- >>> isDouble' '.'
+-- True
+--
+-- >>> isDouble' 'e'
+-- True
 isDouble' :: Char -> Bool
 isDouble' c = c == '.' || c == 'e'
 
+-- | Construct a word token
+-- >>> mkWord "foo"
+-- FWordT :foo
+--
+-- >> mkWord "123"
+-- lexer: word: cannot start with a number or hypthen
 mkWord :: String -> Token
 mkWord w = case word w of
         Right w'    -> FWordT w'
@@ -103,7 +118,6 @@ mkWord w = case word w of
 --
 -- >>> lexList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
 -- (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]],"")
---
 lexList :: String -> (Token, String)
 lexList ls =
   let (lst, rest) = takeList ls
@@ -112,7 +126,6 @@ lexList ls =
 -- |
 -- >>> takeList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
 -- ("\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}","")
---
 takeList :: String -> (String, String)
 takeList = first reverse . go [] (0::Int)
   where
@@ -142,7 +155,6 @@ takeList = first reverse . go [] (0::Int)
 --
 -- >>> lexString "\"foo\\\"bar\""
 -- (FTextT "foo\\\"bar","")
---
 lexString :: String -> (Token, String)
 lexString str = go [] (if head str == '"' then tail str else str)
   where
@@ -199,7 +211,7 @@ eval ws = forM_ ws translate
         dict <- dictionary <$> lift get
         case dict `BT.lookup` w of
           Just entry -> execute entry
-          Nothing    -> fail $ "eval: word not found in dictionary; " <> show w
+          Nothing    -> fail $ "eval: word not found in dictionary: " <> show w
       tkn -> modifyStack (toStackElement tkn)
 
 modifyStack :: StackElement -> Res ()

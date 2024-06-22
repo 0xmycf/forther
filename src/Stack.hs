@@ -6,11 +6,16 @@ module Stack
  -- ** Constructors
  , empty
  , singleton
+ -- ** combinators
+ , Stack.concat
  -- ** Stack Operations
  , push
  , pushN
  , pop
  , popN
+ -- ** Stack Manipulation Forth-Style
+ , swap
+ , rot
  -- ** Pretty Printing
  , prettyPrint
  -- * Stuff for the interperter
@@ -20,31 +25,34 @@ module Stack
  , implies
  ) where
 
-import qualified Data.Char as Char
 import           Data.List ((\\))
 import           Token     (FWord, Token(..))
+import qualified Data.List as List
 
 newtype Stack a
   = Stack [a]
   deriving (Show)
 
 -- | unwraps the underlying list
--- >>> unstack (Stack [1,2,3])
+-- >>> unstack (Stack [1,2,3::Int])
 -- [1,2,3]
 unstack :: Stack a -> [a]
 unstack (Stack ls) = ls
 
 -- |
--- >>> empty
+-- >>> empty @(Stack Int)
 -- Stack []
 empty :: Stack a
 empty = Stack []
 
 -- |
--- >>> singleton 1
+-- >>> singleton (1::Int)
 -- Stack [1]
 singleton :: a -> Stack a
 singleton = Stack . (:[])
+
+concat :: [Stack a] -> Stack a
+concat stacks = Stack (stacks >>= unstack)
 
 push :: a -> Stack a -> Stack a
 push a (Stack ls) = Stack (a : ls)
@@ -53,13 +61,13 @@ push a (Stack ls) = Stack (a : ls)
 --
 -- ## Examples
 --
--- >>> pushN [1,2,3] (Stack [4,5,6])
+-- >>> pushN [1,2,3] (Stack [4,5,6::Int])
 -- Stack [1,2,3,4,5,6]
 pushN :: [a] -> Stack a -> Stack a
 pushN as (Stack ls) = Stack (as ++ ls)
 
 -- |
--- >>> pop (Stack [1,2,3])
+-- >>> pop (Stack [1,2,3::Int])
 -- Just (1,Stack [2,3])
 pop :: Stack a -> Maybe (a, Stack a)
 pop (Stack (a : as)) = Just (a, Stack as)
@@ -76,12 +84,28 @@ popN = go []
               Just (a, stack') -> go (a : acc) (m - 1) stack'
               Nothing          -> Nothing
 
+-- | Swaps the top two elements of the stack
+-- >>> swap (Stack [1,2,3::Int])
+-- Just (Stack [2,1,3])
+swap :: Stack a -> Maybe (Stack a)
+swap = \case
+  Stack (a : b : as) -> Just $ Stack (b : a : as)
+  _                  -> Nothing
+
+-- | Rotates the top three elements of the stack
+-- >>>rot (Stack [1,2,3::Int])
+-- Just (Stack [3,1,2])
+rot :: Stack a -> Maybe (Stack a)
+rot = \case
+  Stack (a : b : c : as) -> Just $ Stack (c : a : b : as)
+  _                      -> Nothing
+
 -- | Pretty prints the stack
--- >>> prettyPrint (Stack [1,2,3,4,5,6,7,8,9,10])
--- "1 2 3 ... 10 9 8"
+-- >>> prettyPrint (Stack [(1::Int),2,3,4,5,6,7,8,9,10])
+-- "{ 1 2 3 4 5 6 7 8 9 10 }"
 --
--- >>> prettyPrint (Stack [1,2,3])
--- "1 2 3"
+-- >>> prettyPrint (Stack [(1::Int)..20])
+-- "{ 1 2 3 4 5 6 7 8 9 10 ... }"
 prettyPrint :: Show a => Stack a -> String
 prettyPrint (Stack ls) =
   "{ " <> (if length (map show ls) > 10
@@ -107,7 +131,7 @@ instance Show StackElement where
   show = \case
     Exact n   -> show n
     Inexact d -> show d
-    Boolean True -> "true"
+    Boolean True  -> "true"
     Boolean False -> "false"
     List xs   -> "{ " ++ unwords (map show xs) ++ " }"
     Text t    -> show t
@@ -220,7 +244,13 @@ instance Num StackElement where
   Text a * Boolean b    = Text (crossProd a (show (fromEnum b)))
 
   List a * List b       = List (crossProd a b)
+  List a * (Exact b)    = List (listMult a b)
+  List a * (Inexact b)  = List (listMult a (floor b))
+  List a * (Boolean b)  = List (listMult a (fromEnum b))
   List a * lhs          = List (crossProd a [lhs])
+  (Exact a) * List b    = List (listMult b a)
+  (Inexact a) * List b  = List (listMult b (floor a))
+  (Boolean a) * List b  = List (listMult b (fromEnum a))
   rhs * List b          = List (crossProd [rhs] b)
   _ * _                 = error "multplication: not defined for non-matching types"
 
@@ -243,3 +273,5 @@ instance Num StackElement where
 crossProd :: [b] -> [b] -> [b]
 crossProd c1 c2 = do { x <- c1; y <- c2; [x,y] }
 
+listMult :: [a] -> Int -> [a]
+listMult ls n = List.concat $ replicate n ls

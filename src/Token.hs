@@ -10,9 +10,15 @@ module Token
 -- | Use the smart constructor `word` instead
 -- An FWord should never be longer than 10 chars
 -- and not contain numbers
+--
+-- >>> show $ FWord "exec"
+-- ":exec"
 newtype FWord
   = FWord String
-  deriving newtype (Eq, Ord, Show)
+  deriving newtype (Eq, Ord)
+
+instance Show FWord where
+  show (FWord str) = ':' : str
 
 pattern Exec :: FWord
 pattern Exec <- FWord "exec"
@@ -21,7 +27,7 @@ pattern Exec <- FWord "exec"
 word :: String -> Either String FWord
 word str
   | length str > 10 = Left "word: too long"
-  | any (`elem` ['0'..'9']) str = Left "word: cannot contain numbers"
+  | head str `elem` '-' : ['0'..'9'] = Left "word: cannot start with a number or hypthen"
   | otherwise = Right (FWord str)
 
 -- TODO move this
