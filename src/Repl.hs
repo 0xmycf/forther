@@ -16,7 +16,8 @@ import           Stack                  (Stack, StackElement(..), empty, pop, pr
 import qualified State
 import           State                  (execState, get, modify, put)
 import           System.IO              (hFlush, stdout)
-import           Token                  (Token(..), pattern Exec, word)
+import           Token                  (Token(..), pattern Exec, word, pattern Colon)
+import Data.Char (isSpace)
 
 type State a = State.State Machine IO a
 
@@ -25,8 +26,8 @@ prefix = "$> "
 
 repl :: IO ()
 repl =
-  void (execState loop (Machine def empty)) --`catch` (\(ErrorCall e) -> putStrLn e >> repl)
-                                            `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
+  void (execState loop (Machine (def eval) empty)) --`catch` (\(ErrorCall e) -> putStrLn e >> repl)
+      `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
 
 -- | recieves the full line
 --
@@ -47,9 +48,15 @@ repl =
 --
 -- >>> lexer "{-2 {\"some string - 2\"}}"
 -- [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
+--
+-- >>> lexer "{ I } 2"
+-- [FListT [FWordT :I],FNumberT 2]
+--
+-- >>> lexer "{ } 2"
+-- [FListT [],FNumberT 2]
 lexer :: String -> [Token]
 lexer line =
-  let hd = dropWhile (== ' ') line
+  let hd = dropWhile isSpace line
   in case headS hd of
     Nothing -> []
     Just (isInt -> True) ->
@@ -102,8 +109,8 @@ isDouble' c = c == '.' || c == 'e'
 -- lexer: word: cannot start with a number or hypthen
 mkWord :: String -> Token
 mkWord w = case word w of
-        Right w'    -> FWordT w'
-        Left reason -> error $ "lexer: " <> reason
+  Right w'    -> FWordT w'
+  Left reason -> error $ "lexer: " <> reason
 
 -- | Token ~ FListT
 --
@@ -118,6 +125,9 @@ mkWord w = case word w of
 --
 -- >>> lexList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
 -- (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]],"")
+--
+-- >>> lexList "{ 1 2 3 } 234"
+-- (FListT [FNumberT 1,FNumberT 2,FNumberT 3]," 234")
 lexList :: String -> (Token, String)
 lexList ls =
   let (lst, rest) = takeList ls
@@ -164,10 +174,12 @@ lexString str = go [] (if head str == '"' then tail str else str)
       | x == '\\' = go (head xs : x : acc) (tail xs)
       | otherwise = go (x:acc) xs
 
+       
+
 loop :: State ()
 loop = do
   liftIO do { putStr prefix; hFlush stdout }
-  line <- dropWhile (==' ') <$> liftIO getLine
+  line <- dropWhile isSpace <$> liftIO getLine
   case headS line of
     Nothing           -> pure ()
     Just c | c == ':' -> get >>= \oldState ->
@@ -207,6 +219,8 @@ eval ws = forM_ ws translate
         case ls of
           List ts -> eval (map toToken ts)
           _       -> fail "eval: exec: not a list"
+      -- TODO this is for debugging
+      FWordT Colon -> Result.fail "eval: : not allowed in this context"
       FWordT w   -> do
         dict <- dictionary <$> lift get
         case dict `BT.lookup` w of
@@ -226,7 +240,7 @@ execute (BuiltIn f)   = void f
 -- | Defines a custom new word in the dictionary
 define :: String -> Res DefResult
 define str =
-  let str' = dropWhile (`elem` [' ', ':']) str in
+  let str' = dropWhile (\e -> isSpace e || e `elem` [' ', ':']) str in
   let (w, rest) = span (/= ' ') str' in
   case word w of
     Left reason -> fail $ "define: " <> reason
@@ -243,4 +257,3 @@ dr = curry DefResult
 
 instance Show DefResult where
   show (DefResult (w, rest))  = "Defined: " <> w <> " as " <> rest
-

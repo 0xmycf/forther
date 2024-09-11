@@ -13,17 +13,18 @@ module Dictionary
 
 import           BinTree       (BinTree, insert, keys)
 import qualified BinTree
+import           Control.Monad (forM_)
 import           Data.Either   (fromRight)
 import           Data.Function ((&))
 import qualified Data.List     as List
 import           Result        (Result, fail, lift, orFailWith)
 import qualified Stack
 import           Stack         (Stack, StackElement(..), empty, implies, popN,
-                                prettyPrint, push)
+                                prettyPrint, push, toToken)
 import qualified State
 import           State         (liftIO)
 import           System.Exit   (exitSuccess)
-import           Token         (FWord, word)
+import           Token         (FWord, Token, word)
 
 data Machine
   = Machine
@@ -118,12 +119,54 @@ reverse = get >>= \m ->
     Just _ -> Result.fail "reverse: Wrong type on the stack"
     Nothing -> Result.fail "reverse: StackUnderflow"
 
-def :: Dict
-def  = let i = insert
-           uw = unsafeWord
+
+-- | TODO so much redundant code for the for
+type Res = Result String (State.State Machine IO)
+type Eval = [Token] -> Res ()
+
+-- | TODO
+-- I wanted to implement for in terms of already defined
+-- forther words, though without a counter or some jump on condition
+-- this is not possible.
+--
+-- Once I have implemented some low-level jump or something similar
+-- I might be able to rewrite this again into something simpler
+--
+-- ## Usage
+-- @ { I show } 1 10 for @
+-- This will print the numbers from 1 to 10 ( or rather the stack )
+--
+-- # Different todo
+-- this is not in the right place
+fortherFor :: Eval -> StackOperation ()
+fortherFor eval = get >>= \m ->
+    case Stack.popN 3 m.stack of
+        Just ([b, f, t], stack) ->
+            case (b,f, t) of
+                (List body, Exact from_, Exact to_) ->
+                    do
+                    forM_ [from_..to_] (\i -> do
+                        put m { stack = stack
+                            , dictionary = BinTree.insert (unsafeWord "I") (Literal . show $ i) m.dictionary }
+                        eval $ map toToken body)
+
+                    put m { stack = stack
+                          , dictionary = BinTree.delete (unsafeWord "I") m.dictionary
+                          }
+
+                -- TODO I could implement looping over strings or lists with only one get
+                _ -> Result.fail "Cannot loop over non exact values"
+        _  -> Result.fail "Not enough matching elements on the stack"
+
+-- | TODO remove eval parameter
+def :: Eval -> Dict
+def eval =
+    let i = insert
+        uw = unsafeWord
         in BinTree.empty
         & i (uw "quit")   (BuiltIn (liftIO exitSuccess))
         & i (uw "show")   (BuiltIn (liftIO . putStrLn . prettyPrint . stack =<< get))
+        & i (uw "ls")     (Literal "show") -- alias for show
         & i (uw ".")      (BuiltIn dot)
         & i (uw "dup")    (BuiltIn dup)
         & i (uw "swap")   (BuiltIn swap)
@@ -169,6 +212,7 @@ def  = let i = insert
 
         -}
         & i (uw "if")     (Literal "{swap} * exec exec .")
+        & i (uw "for")    (BuiltIn $ fortherFor eval)
 
         {-
         This one is hardcoded in the repl
@@ -198,4 +242,4 @@ def  = let i = insert
           println -- prints the top of the stack (does not remove it)
         -}
         & i (uw "println") (BuiltIn (peek >>= liftIO . print))
-
+        & i (uw "print") (BuiltIn (peek >>= liftIO . putStr . show))

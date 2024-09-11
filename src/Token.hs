@@ -4,6 +4,7 @@ module Token
   -- * Words in the Forther langauge
   , FWord
   , pattern Exec
+  , pattern Colon
   , word
   ) where
 
@@ -22,6 +23,9 @@ instance Show FWord where
 
 pattern Exec :: FWord
 pattern Exec <- FWord "exec"
+
+pattern Colon :: FWord
+pattern Colon <- FWord ":"
 
 -- | Creates a word from a String
 word :: String -> Either String FWord

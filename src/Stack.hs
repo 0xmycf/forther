@@ -73,7 +73,11 @@ pop :: Stack a -> Maybe (a, Stack a)
 pop (Stack (a : as)) = Just (a, Stack as)
 pop _                = Nothing
 
--- | TODO still unsafe
+-- |
+-- Returns the first n (Int) elements of the given `Stack a`
+-- and the new stack without the first n (Int) elements
+-- * the left most element in the resulting list is the n-th popped element
+-- * the right most element was the first element on the list (the first popped one)
 popN :: Int -> Stack a -> Maybe ([a], Stack a)
 popN = go []
   where
@@ -134,7 +138,7 @@ instance Show StackElement where
     Boolean True  -> "true"
     Boolean False -> "false"
     List xs   -> "{ " ++ unwords (map show xs) ++ " }"
-    Text t    -> show t
+    Text t    -> t
     Word t    -> show t
 
 toStackElement :: Token -> StackElement
