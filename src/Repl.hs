@@ -146,7 +146,7 @@ takeList = first reverse . go [] (0::Int)
       | x == '}' && 1 == n = (acc, xs)
       | x == '}'           = go (x:acc) (n - 1) xs
       | otherwise          = go (x:acc) n xs
-    go a n [] = error $ "takeList: unterminated list: " <> show (reverse a) <> " {-count:" <> show n
+    go a n [] = error $ "takeList: unterminated list: " <> show (reverse a) <> " '{'-count:" <> show n
 
 -- | Token ~ FTextT
 --

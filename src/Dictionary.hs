@@ -19,8 +19,8 @@ import           Data.Function ((&))
 import qualified Data.List     as List
 import           Result        (Result, fail, lift, orFailWith)
 import qualified Stack
-import           Stack         (Stack, StackElement(..), empty, implies, popN,
-                                prettyPrint, push, toToken)
+import           Stack         (Stack, StackElement(..), divides, empty,
+                                implies, popN, prettyPrint, push, toToken)
 import qualified State
 import           State         (liftIO)
 import           System.Exit   (exitSuccess)
@@ -231,6 +231,7 @@ def eval =
         & i (uw "<=")     (BuiltIn (binOp (\a b -> Boolean (a <= b))))
         & i (uw ">=")     (BuiltIn (binOp (\a b -> Boolean (a >= b))))
         & i (uw "=>")     (BuiltIn (binOp implies))
+        & i (uw "|")      (BuiltIn (binOp (\a b -> Boolean (b `divides` a))))
         & i (uw "clear")  (BuiltIn (modify (\m -> m { stack = empty })))
 
         & i (uw "reverse") (BuiltIn Dictionary.reverse)

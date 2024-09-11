@@ -23,6 +23,8 @@ module Stack
  , toStackElement
  , toToken
  , implies
+ -- * Arithmetic
+ , divides
  ) where
 
 import           Data.List ((\\))
@@ -279,3 +281,16 @@ crossProd c1 c2 = do { x <- c1; y <- c2; [x,y] }
 
 listMult :: [a] -> Int -> [a]
 listMult ls n = List.concat $ replicate n ls
+
+-- >>> divides (Exact 2) (Exact 4)
+-- True
+--
+-- >>> divides (Exact 2) (Exact 5)
+-- False
+--
+-- >>> divides (Exact 2) (Inexact 4.0)
+-- divides: not defined for non-exact values
+divides :: StackElement -> StackElement -> Bool
+divides a b = case (a,b) of
+  (Exact a', Exact b') -> b' `mod` a' == 0
+  _ -> error "divides: not defined for non-exact values"
