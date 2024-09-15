@@ -81,8 +81,12 @@ You can override any word at any time, even built-in ones.
   - ✅ If
   - ✅ For
   - ✅ Basic stack operations
+  - ❌ While (to have conditional looping)
+- `ErrorCall` free (better error handling)
 - ❌ Compile mode (& reading from a file)
 - ❌ Dumping the current word list to a file
+- ❌ JVM backend
+- (❌) Maybe a cuomst vm?
 - ❌ IO Operations / Graphs stuff for Advent of Code.
 
 ### Goal

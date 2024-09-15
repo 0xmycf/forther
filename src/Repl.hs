@@ -1,180 +1,38 @@
 {-# LANGUAGE OverloadedRecordDot, PatternSynonyms, ViewPatterns #-}
 module Repl ( repl ) where
 
-import qualified BinTree                as BT
-import           Control.Exception      (AsyncException, catch)
-import           Control.Exception.Base (AsyncException(UserInterrupt))
-import           Control.Monad          (forM_, void, when)
-import           Data.Bifunctor         (Bifunctor(first))
-import           Dictionary             (DictEntry(..), Machine(..), def)
-import           Prelude                hiding (fail)
-import           Result                 (Result(..), fail, lift, liftIO,
-                                         pattern Err, pattern Ok, orFailWith)
-import           Save                   (headS)
-import           Stack                  (Stack, StackElement(..), empty, pop, prettyPrint, push,
-                                         toStackElement, toToken)
+import qualified BinTree           as BT
+import           Control.Exception (AsyncException(UserInterrupt), catch)
+import           Control.Monad     (forM_, void, when)
+import           Data.Char         (isSpace)
+import           Dictionary        (DictEntry(..), Machine(..), def)
+import           Prelude           hiding (fail)
+import           Result            (Result(..), fail, lift, liftIO, orFailWith,
+                                    pattern Err, pattern Ok)
+import           Save              (headS)
+import           Stack             (Stack, StackElement(..), empty, pop,
+                                    prettyPrint, push, toStackElement, toToken)
 import qualified State
-import           State                  (execState, get, modify, put)
-import           System.IO              (hFlush, stdout)
-import           Token                  (Token(..), pattern Exec, word, pattern Colon)
-import Data.Char (isSpace)
+import           State             (execState, get, modify, put)
+import           System.IO         (hFlush, stdout)
+import           System.IO.Error   (isEOFError)
+import           Token             (Token(..), lexer, pattern Colon,
+                                    pattern Exec, word)
 
 type State a = State.State Machine IO a
 
 prefix :: String
 prefix = "$> "
 
+bye :: String
+bye = "\ESC[2K\ESC[0Ggoodbye"
+
 repl :: IO ()
 repl =
-  void (execState loop (Machine (def eval) empty)) --`catch` (\(ErrorCall e) -> putStrLn e >> repl)
-      `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn "goodbye")
-
--- | recieves the full line
---
--- >>> lexer "1 2 3"
--- [FNumberT 1,FNumberT 2,FNumberT 3]
---
--- >>> lexer "1 2 3 \"b\\ar\""
--- [FNumberT 1,FNumberT 2,FNumberT 3,FTextT "b\\ar"]
---
--- >>> lexer "123 2132 30103 2322"
--- [FNumberT 123,FNumberT 2132,FNumberT 30103,FNumberT 2322]
---
--- >>> lexer "1 2 print"
--- [FNumberT 1,FNumberT 2,FWordT :print]
---
--- >>> lexer "-2"
--- [FNumberT (-2)]
---
--- >>> lexer "{-2 {\"some string - 2\"}}"
--- [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
---
--- >>> lexer "{ I } 2"
--- [FListT [FWordT :I],FNumberT 2]
---
--- >>> lexer "{ } 2"
--- [FListT [],FNumberT 2]
-lexer :: String -> [Token]
-lexer line =
-  let hd = dropWhile isSpace line
-  in case headS hd of
-    Nothing -> []
-    Just (isInt -> True) ->
-      let (num, rest) = span isDouble hd
-      in if any isDouble' num
-          then FDoubleT (read num) : lexer rest
-          else FNumberT (read num) : lexer rest
-    Just '"' ->
-      let (token, rest) = lexString hd
-      in token : lexer rest
-    Just '{' ->
-      let (token, rest) = lexList hd
-      in token : lexer rest
-    Just 't' -> let (w, rest) = span (/= ' ') hd
-                in if w == "true" then FBoolT True : lexer rest
-                else mkWord w : lexer rest
-    Just 'f' -> let (w,r) = span (/= ' ') hd
-                in if w == "false" then FBoolT False : lexer r
-                else mkWord w : lexer r
-    Just _ ->
-      let (w, rest) = span (/= ' ') hd
-      in mkWord w : lexer rest
-
--- | Predicate for matching an integer
--- >>> all isInt ([ '0'..'9'] ++ ['-'])
--- True
-isInt :: Char -> Bool
-isInt c = c `elem` ['0'..'9'] || c == '-'
-
--- | Predicate for matching a double
--- >>> all isDouble ([ '0'..'9'] ++ ['-', '.', 'e'])
--- True
-isDouble :: Char -> Bool
-isDouble c = isInt c || c == '.' || c == 'e'
-
--- | Predicate for matching a double without checking isInt
--- >>> isDouble' '.'
--- True
---
--- >>> isDouble' 'e'
--- True
-isDouble' :: Char -> Bool
-isDouble' c = c == '.' || c == 'e'
-
--- | Construct a word token
--- >>> mkWord "foo"
--- FWordT :foo
---
--- >> mkWord "123"
--- lexer: word: cannot start with a number or hypthen
-mkWord :: String -> Token
-mkWord w = case word w of
-  Right w'    -> FWordT w'
-  Left reason -> error $ "lexer: " <> reason
-
--- | Token ~ FListT
---
--- >>> lexList "{}"
--- (FListT [],"")
---
--- >>> lexList "{1}"
--- (FListT [FNumberT 1],"")
---
--- >>> lexList "{123 31}"
--- (FListT [FNumberT 123,FNumberT 31],"")
---
--- >>> lexList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
--- (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]],"")
---
--- >>> lexList "{ 1 2 3 } 234"
--- (FListT [FNumberT 1,FNumberT 2,FNumberT 3]," 234")
-lexList :: String -> (Token, String)
-lexList ls =
-  let (lst, rest) = takeList ls
-  in (FListT (lexer lst), rest)
-
--- |
--- >>> takeList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
--- ("\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}","")
-takeList :: String -> (String, String)
-takeList = first reverse . go [] (0::Int)
-  where
-    go :: String -> Int -> String -> (String, String)
-    go acc n (x:xs)
-      | x == '{' && 0 == n = go acc (n + 1) xs
-      | x == '{'           = go (x:acc) (n + 1) xs
-      | x == '}' && 1 == n = (acc, xs)
-      | x == '}'           = go (x:acc) (n - 1) xs
-      | otherwise          = go (x:acc) n xs
-    go a n [] = error $ "takeList: unterminated list: " <> show (reverse a) <> " '{'-count:" <> show n
-
--- | Token ~ FTextT
---
--- \" and " are the same in case of chars
--- >>> '\"' == '"'
--- True
---
--- >>> lexString "foo\""
--- (FTextT "foo","")
---
--- >>> lexString "\"foo\""
--- (FTextT "foo","")
---
--- >>> lexString "\"foo\"bar"
--- (FTextT "foo","bar")
---
--- >>> lexString "\"foo\\\"bar\""
--- (FTextT "foo\\\"bar","")
-lexString :: String -> (Token, String)
-lexString str = go [] (if head str == '"' then tail str else str)
-  where
-    go _ []       = error "lexString: unterminated string"
-    go acc (x:xs)
-      | x == '"'  = (FTextT (reverse acc), xs)
-      | x == '\\' = go (head xs : x : acc) (tail xs)
-      | otherwise = go (x:acc) xs
-
-       
+  void (execState loop (Machine (def eval) empty))
+      -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- TODO this resets the dictionary so not good
+      `Control.Exception.catch` (\(e::Control.Exception.AsyncException) -> when (e == Control.Exception.UserInterrupt) $ putStrLn "" >> putStrLn bye)
+      `Control.Exception.catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
 
 loop :: State ()
 loop = do
@@ -241,11 +99,11 @@ execute (BuiltIn f)   = void f
 define :: String -> Res DefResult
 define str =
   let str' = dropWhile (\e -> isSpace e || e `elem` [' ', ':']) str in
-  let (w, rest) = span (/= ' ') str' in
+  let (w, dropWhile isSpace -> rest) = span (/= ' ') str' in
   case word w of
-    Left reason -> fail $ "define: " <> reason
+    Left reason -> Result.fail $ "define: " <> reason
     Right fword ->
-      dr w rest <$ lift (modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary })
+      dr w rest <$ Result.lift (State.modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary })
 
 newtype DefResult
   = DefResult (String, String)
@@ -256,4 +114,9 @@ dr :: String -> String -> DefResult
 dr = curry DefResult
 
 instance Show DefResult where
+  -- >>> show (DefResult ("foo", "bar"))
+  -- Defined: foo as bar
+  --
+  -- >>> show (DefResult ("foo", "  bar baz"))
+  -- Defined: foo as   bar baz
   show (DefResult (w, rest))  = "Defined: " <> w <> " as " <> rest

@@ -67,6 +67,7 @@ library
     Result
   build-depends:    
       base ^>=4.18.2.0
+    , deepseq
   hs-source-dirs:   src
   default-language: GHC2021
 

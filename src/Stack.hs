@@ -1,3 +1,6 @@
+
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use <&>" #-}
 module Stack
  ( Stack(..)
  -- * Functions
@@ -27,9 +30,11 @@ module Stack
  , divides
  ) where
 
-import           Data.List ((\\))
-import           Token     (FWord, Token(..))
-import qualified Data.List as List
+import           Control.DeepSeq (NFData)
+import           Data.List       ((\\))
+import qualified Data.List       as List
+import           GHC.Generics    (Generic)
+import           Token           (FWord, Token(..))
 
 newtype Stack a
   = Stack [a]
@@ -108,13 +113,16 @@ rot = \case
 
 -- | Pretty prints the stack
 -- >>> prettyPrint (Stack [(1::Int),2,3,4,5,6,7,8,9,10])
--- "{ 1 2 3 4 5 6 7 8 9 10 }"
+-- "{ ->1 2 3 4 5 6 7 8 9 10 }"
 --
 -- >>> prettyPrint (Stack [(1::Int)..20])
--- "{ 1 2 3 4 5 6 7 8 9 10 ... }"
+-- "{ ->1 2 3 4 5 6 7 8 9 10 ... }"
+--
+-- >>> prettyPrint (Stack ([]::[Int]))
+-- "{  }"
 prettyPrint :: Show a => Stack a -> String
 prettyPrint (Stack ls) =
-  "{ " <> (if length (map show ls) > 10
+  "{ " <> (if null ls then "" else "->") <> (if length (map show ls) > 10
     then unwords (map show (take 10 ls)) <> " ..."
     else unwords (map show ls)) <> " }"
 
@@ -125,13 +133,13 @@ prettyPrint (Stack ls) =
 -------------------------------------------------------------------------------}
 
 data StackElement where
-  Exact :: Int -> StackElement
-  Inexact :: Double -> StackElement
-  Boolean :: Bool -> StackElement
-  List :: [StackElement] -> StackElement
-  Text :: String -> StackElement
-  Word :: FWord -> StackElement
-  deriving (Eq, Ord)
+  Exact :: !Int -> StackElement
+  Inexact :: !Double -> StackElement
+  Boolean :: !Bool -> StackElement
+  List :: ![StackElement] -> StackElement -- this is problematic bcs its lazy
+  Text :: !String -> StackElement
+  Word :: !FWord -> StackElement
+  deriving (Eq, Generic, NFData, Ord)
 
 instance Show StackElement where
   show = \case
@@ -163,7 +171,7 @@ toToken = \case
 
 implies :: StackElement -> StackElement -> StackElement
 implies (Boolean a) (Boolean b) = Boolean (not a || b)
-implies _ _ = error "implies: not defined for non-boolean values (yet)" -- TODO
+implies _ _ = error "implies: not defined for non-boolean values" -- TODO
 
 -- TODO tests
   -- Boolean :: Bool -> StackElement
@@ -196,8 +204,6 @@ instance Num StackElement where
   List a + lhs          = List (a <> [lhs])
   rhs + List b          = List (rhs : b)
   _ + _                 = error "addition: not defined for non-matching types"
-
-
 
   {- SUBTRACTION ------------------------------------------------------
   ---------------------------------------------------------------------}
@@ -282,15 +288,15 @@ crossProd c1 c2 = do { x <- c1; y <- c2; [x,y] }
 listMult :: [a] -> Int -> [a]
 listMult ls n = List.concat $ replicate n ls
 
--- >>> divides (Exact 2) (Exact 4)
+-- >>> (Exact 2) `divides` (Exact 4)
 -- True
 --
--- >>> divides (Exact 2) (Exact 5)
+-- >>> (Exact 2) `divides` (Exact 5)
 -- False
 --
--- >>> divides (Exact 2) (Inexact 4.0)
+-- >>> (Exact 2) `divides` (Inexact 4.0)
 -- divides: not defined for non-exact values
 divides :: StackElement -> StackElement -> Bool
 divides a b = case (a,b) of
   (Exact a', Exact b') -> b' `mod` a' == 0
-  _ -> error "divides: not defined for non-exact values"
+  _                    -> error "divides: not defined for non-exact values"

@@ -11,20 +11,23 @@ module Dictionary
   , Machine(..)
   ) where
 
-import           BinTree       (BinTree, insert, keys)
+import           BinTree           (BinTree, insert, keys)
 import qualified BinTree
-import           Control.Monad (forM_)
-import           Data.Either   (fromRight)
-import           Data.Function ((&))
-import qualified Data.List     as List
-import           Result        (Result, fail, lift, orFailWith)
+import           Control.DeepSeq   (force)
+import           Control.Monad     (forM_)
+import           Data.Either       (fromRight)
+import           Data.Function     ((&))
+import qualified Data.List         as List
+import           Result            (Result, fail, lift,  orFailWith)
 import qualified Stack
-import           Stack         (Stack, StackElement(..), divides, empty,
-                                implies, popN, prettyPrint, push, toToken)
+import           Stack             (Stack, StackElement(..), divides,
+                                    empty, implies, popN, prettyPrint, push,
+                                    toToken)
 import qualified State
-import           State         (liftIO)
-import           System.Exit   (exitSuccess)
-import           Token         (FWord, Token, word)
+import           State             (liftIO)
+import           System.Exit       (exitSuccess)
+import           Token             (FWord, Token, word)
+import Control.Exception (ErrorCall, try, evaluate)
 
 data Machine
   = Machine
@@ -95,7 +98,11 @@ binOp op = do
   m <- get
   (!elems, !rest) <- popN 2 m.stack `orFailWith` "binOp: StackUnderflow"
   case elems of
-    [a, b] -> let !res = (a `op` b) in put m { stack = push res rest }
+    [a, b] -> do
+      !res <- liftIO $ try (evaluate $ force $ a `op` b)
+      case res of
+          Right res'            -> put m { stack = push res' rest }
+          Left (e :: ErrorCall) -> Result.fail $ "binOp: " <> show e
     _      -> Result.fail "binOp: Not enough elements on the stack"
 
 {- pop :: StackOperation StackElement
@@ -118,7 +125,6 @@ reverse = get >>= \m ->
       put m { stack = Stack.push neu rest}
     Just _ -> Result.fail "reverse: Wrong type on the stack"
     Nothing -> Result.fail "reverse: StackUnderflow"
-
 
 -- | TODO so much redundant code for the for
 type Res = Result String (State.State Machine IO)
@@ -222,6 +228,7 @@ def eval =
         & i (uw "+")      (BuiltIn (binOp (+)))
         & i (uw "sub")    (BuiltIn (binOp (-)))
         & i (uw "*")      (BuiltIn (binOp (*)))
+        -- & i (uw "/")      (BuiltIn (binOp (/))) -- this is also very unsafe...
         & i (uw "abs")    (BuiltIn (unOp abs))
         & i (uw "sign")   (BuiltIn (unOp signum))
 
