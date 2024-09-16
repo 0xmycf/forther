@@ -75,6 +75,17 @@ The general syntax follows this:
 Use the `:words` word to see all words.
 You can override any word at any time, even built-in ones.
 
+## Examples
+
+See `./examples/*.forther` for examples.
+
+> [!NOTE]
+> Right now forther cannot read from a file, thus
+> the shebang does not actually work yet.<br>
+> Run the files like this instead:
+>
+> `cat ./examples/fizzbuzz.forther | forther`
+
 ## Current Status (incomplete)
 
 - ✅ A basic repl

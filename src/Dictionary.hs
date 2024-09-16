@@ -250,3 +250,8 @@ def eval =
         -}
         & i (uw "println") (BuiltIn (peek >>= liftIO . print))
         & i (uw "print") (BuiltIn (peek >>= liftIO . putStr . show))
+
+        -- TODO remove this once we support shebangs
+        -- NOTE: I plan on using # as a way of defining builtin keywords / macros
+
+        & i (uw "#!") (Literal "\"shebang is not supported yet\" println ." )
