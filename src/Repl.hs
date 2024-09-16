@@ -1,8 +1,9 @@
-{-# LANGUAGE OverloadedRecordDot, PatternSynonyms, ViewPatterns #-}
+{-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 module Repl ( repl ) where
 
 import qualified BinTree           as BT
-import           Control.Exception (AsyncException(UserInterrupt), catch)
+import           Control.Exception (AsyncException(UserInterrupt),
+                                    SomeException(SomeException), catch, try)
 import           Control.Monad     (forM_, void, when)
 import           Data.Char         (isSpace)
 import           Dictionary        (DictEntry(..), Machine(..), def)
@@ -13,7 +14,7 @@ import           Save              (headS)
 import           Stack             (Stack, StackElement(..), empty, pop,
                                     prettyPrint, push, toStackElement, toToken)
 import qualified State
-import           State             (execState, get, modify, put)
+import           State             (execState, get, modify, put, runState)
 import           System.IO         (hFlush, stdout)
 import           System.IO.Error   (isEOFError)
 import           Token             (Token(..), lexer, pattern Colon,
@@ -30,9 +31,9 @@ bye = "\ESC[2K\ESC[0Ggoodbye"
 repl :: IO ()
 repl =
   void (execState loop (Machine (def eval) empty))
-      -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- TODO this resets the dictionary so not good
-      `Control.Exception.catch` (\(e::Control.Exception.AsyncException) -> when (e == Control.Exception.UserInterrupt) $ putStrLn "" >> putStrLn bye)
-      `Control.Exception.catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
+      -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- this resets the dictionary so not good
+      `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn bye)
+      `catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
 
 loop :: State ()
 loop = do
@@ -44,12 +45,13 @@ loop = do
       runResult (define line) >>= \case
       Ok  dr' -> liftIO $ print dr'
       Err e   -> liftIO (putStrLn e) >> put oldState
-    Just _            -> do
-      res <- runResult (eval . lexer $ line)
+    Just _ -> do
       oldState <- get
+      res <- liftIO $ try $ runState (runResult (eval . lexer $ line)) oldState
       case res of
-        Err e -> liftIO (putStrLn e) >> put oldState
-        Ok _  -> getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint
+        Left (SomeException e) -> liftIO (print e)
+        Right (Err e, _)       -> liftIO (putStrLn e)
+        Right (Ok _, ns)       -> put ns >> getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint
   loop
 
 getStack :: State (Stack StackElement)
@@ -92,14 +94,19 @@ modifyStack = lift . modify . setStack . push
 
 execute :: DictEntry -> Res ()
 execute (Literal str) = eval $ lexer str
-execute (BuiltIn f)   = void f
+execute (BuiltIn f)   = f {- do -}
+  -- s <- lift get
+  -- foo <- liftIO $ runState (runResult f) s `catch` \(SomeException e) -> error (show e <> " sljfljfd ")
+  -- error "execute"
 {-# INLINE execute #-}
 
 -- | Defines a custom new word in the dictionary
 define :: String -> Res DefResult
-define str =
-  let str' = dropWhile (\e -> isSpace e || e `elem` [' ', ':']) str in
-  let (w, dropWhile isSpace -> rest) = span (/= ' ') str' in
+define str = do
+  let str' = dropWhile (\e -> isSpace e || e `elem` [' ', ':']) str
+      (w, dropWhile isSpace -> rest) = span (/= ' ') str'
+  when (null w) $ Result.fail "define: empty word"
+  when (null rest) $ Result.fail "define: empty definition"
   case word w of
     Left reason -> Result.fail $ "define: " <> reason
     Right fword ->

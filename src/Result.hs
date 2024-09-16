@@ -1,6 +1,7 @@
 {-# LANGUAGE PatternSynonyms #-}
 module Result
   ( Result(runResult)
+--  , runResult'
   , pattern Err
   , pattern Ok
   , Result.fail
@@ -33,7 +34,7 @@ ok a = Result $ pure (Right a)
 
 orFailWith :: Monad m => Maybe a -> e -> Result e m a
 orFailWith e reason = case e of
-  Just a -> pure a
+  Just a  -> pure a
   Nothing -> Result.fail reason
 
 liftEither :: Monad m => Either e a -> Result e m a

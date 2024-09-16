@@ -15,6 +15,7 @@ extra-doc-files:    CHANGELOG.md
 
 common extensions
   default-extensions:
+    OverloadedRecordDot
     MultiWayIf
     BlockArguments
     DerivingStrategies

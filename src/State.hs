@@ -13,7 +13,8 @@ module State
   , liftIO
   , lift
   ) where
-import Control.Monad.IO.Class (MonadIO (liftIO))
+
+import           Control.Monad.IO.Class (MonadIO(liftIO))
 
 {-
   I said I wanted to do this without any external dependencies...
@@ -70,8 +71,8 @@ instance MonadIO m => MonadIO (State s m) where
   liftIO io = state \ns -> do
     a <- liftIO io
     pure (a, ns)
-      
-lift :: Monad m => m a -> State s m a 
+
+lift :: Monad m => m a -> State s m a
 lift action = state $ \s -> do
   a <- action
   pure (a, s)

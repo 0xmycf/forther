@@ -14,20 +14,19 @@ module Dictionary
 import           BinTree           (BinTree, insert, keys)
 import qualified BinTree
 import           Control.DeepSeq   (force)
+import           Control.Exception (ErrorCall, evaluate, try)
 import           Control.Monad     (forM_)
 import           Data.Either       (fromRight)
 import           Data.Function     ((&))
 import qualified Data.List         as List
-import           Result            (Result, fail, lift,  orFailWith)
+import           Result            (Result, fail, lift, orFailWith)
 import qualified Stack
-import           Stack             (Stack, StackElement(..), divides,
-                                    empty, implies, popN, prettyPrint, push,
-                                    toToken)
+import           Stack             (Stack, StackElement(..), divides, empty,
+                                    implies, popN, prettyPrint, push, toToken)
 import qualified State
 import           State             (liftIO)
 import           System.Exit       (exitSuccess)
 import           Token             (FWord, Token, word)
-import Control.Exception (ErrorCall, try, evaluate)
 
 data Machine
   = Machine
@@ -35,12 +34,10 @@ data Machine
       , stack      :: Stack StackElement
       }
 
-type State = Result String (State.State Machine IO) ()
-
 data DictEntry
   = Literal String
   -- TODO the type of this function should capute the state
-  | BuiltIn State
+  | BuiltIn (Res ())
 
 type Dict = (BinTree FWord DictEntry)
 
@@ -49,7 +46,7 @@ unsafeWord = fromRight (error "Word malformed") . word
 
 type StackOperation = Result String (State.State Machine IO)
 
-modify :: (Machine -> Machine) -> State
+modify :: (Machine -> Machine) -> Res ()
 modify = lift . State.modify
 
 get :: StackOperation Machine
@@ -90,8 +87,10 @@ unOp :: (StackElement -> StackElement) -> StackOperation ()
 unOp f = do
   m <- get
   (!elem', !rest) <- Stack.pop m.stack ` orFailWith` "unOp: StackUnderflow"
-  let !res = f elem'
-  put $ m { stack = push res rest }
+  !res <- liftIO $ try (evaluate $ force $ f elem')
+  case res of
+    Right res'            -> put $ m { stack = push res' rest }
+    Left (e :: ErrorCall) -> Result.fail $ "unOp: " <> show e
 
 binOp :: (StackElement -> StackElement -> StackElement) -> StackOperation ()
 binOp op = do
