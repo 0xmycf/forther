@@ -1,4 +1,4 @@
-( #! /usr/bin/env forther )
+#! /usr/bin/env forther
 
 :emit println . ;
 :lp 

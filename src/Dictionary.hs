@@ -12,6 +12,8 @@ module Dictionary
   , FortherCompileMode(..)
   , setCompileMode
   , setRunMode
+  , ReadMode(..)
+  , readModeIsFile
   ) where
 
 import           BinTree           (BinTree, insert, keys)
@@ -29,6 +31,7 @@ import           Stack             (Stack, StackElement(..), divides, empty,
 import qualified State
 import           State             (liftIO)
 import           System.Exit       (exitSuccess)
+import           System.IO         (Handle)
 import           Token             (FWord, Token, word)
 
 data Machine
@@ -36,12 +39,27 @@ data Machine
       { dictionary :: Dict
       , stack      :: Stack StackElement
       , mode       :: FortherCompileMode
+      , readMode   :: ReadMode
+        -- TODO
+      , file       :: Maybe Handle
+        -- TODO make this prettier
       }
 
 data FortherCompileMode
   = CompileMode
   | RunMode
   deriving (Eq)
+
+-- TOOD this doesnt belong in here and should be moved elsewhere
+-- the whole file io stuff should be refactored alongside
+data ReadMode
+  = File FilePath -- ^ Which file to read?
+  | Repl
+  deriving (Eq)
+
+readModeIsFile :: ReadMode -> Bool
+readModeIsFile  = \case (File _) -> True
+                        _        -> False
 
 setCompileMode :: Machine -> Machine
 setCompileMode m = m { mode = CompileMode }

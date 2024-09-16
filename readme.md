@@ -97,7 +97,8 @@ See `./examples/*.forther` for examples.
   - Error handling is done in multiple ways (through exceptions and the Result type).
     It would be nicer, to handle all internal (meaning all errors that I have control over)
     in the same way. This would also lead to better error messages.
-- ❌ Compile mode (& reading from a file)
+- ✅ reading from a file
+- 🚧 Compile mode 
 - ❌ Dumping the current word list to a file
 - ❌ JVM backend
 - (❌) Maybe a cuomst vm?

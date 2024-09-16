@@ -1,4 +1,6 @@
 {-# LANGUAGE PatternSynonyms, ViewPatterns #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Avoid lambda" #-}
 module Repl ( repl ) where
 
 import qualified BinTree           as BT
@@ -9,9 +11,10 @@ import           Data.Char         (isSpace)
 import qualified Data.Char         as Char
 import           Data.Functor      (($>))
 import           Data.List         (dropWhileEnd)
+import           Data.Maybe        (fromMaybe)
 import           Dictionary        (DictEntry(..), FortherCompileMode(..),
-                                    Machine(..), def, setCompileMode,
-                                    setRunMode)
+                                    Machine(..), ReadMode(..), def,
+                                    readModeIsFile, setCompileMode, setRunMode)
 import           Prelude           hiding (fail)
 import           Result            (Result(..), fail, lift, liftIO, orFailWith,
                                     pattern Err, pattern Ok)
@@ -20,7 +23,8 @@ import           Stack             (Stack, StackElement(..), empty, pop,
                                     prettyPrint, push, toStackElement, toToken)
 import qualified State
 import           State             (execState, get, modify, put, runState)
-import           System.IO         (hFlush, stdout)
+import           System.IO         (IOMode(ReadMode), hFlush, hGetLine, stdout,
+                                    withFile)
 import           System.IO.Error   (isEOFError)
 import           Token             (Token(..), lexer, pattern Colon,
                                     pattern Exec, word)
@@ -33,16 +37,24 @@ prefix = "$> "
 bye :: String
 bye = "\ESC[2K\ESC[0Ggoodbye"
 
-repl :: IO ()
-repl =
-  void (execState loop (Machine (def eval) empty RunMode))
-      -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- this resets the dictionary so not good
-      `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn bye)
-      `catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
+repl :: ReadMode -> IO ()
+repl readMode =
+  case readMode of
+    File path ->
+      withFile path ReadMode
+      ( \file -> run (Just file) )
+    Repl -> run Nothing
+  where
+    run mayFile =
+      void (execState loop (Machine (def eval) empty RunMode readMode mayFile))
+          -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- this resets the dictionary so not good
+          `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn bye)
+          `catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
 
 loop :: State ()
 loop = do
   line <- promptWithInput
+  readMode <- readMode <$> get
   case headS line of
     Nothing           -> pure ()
     Just c | c == ':' -> get >>= \oldState ->
@@ -55,13 +67,17 @@ loop = do
       case res of
         Left (SomeException e) -> liftIO (print e)
         Right (Err e, _)       -> liftIO (putStrLn e)
-        Right (Ok _, ns)       -> put ns >> getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint
+        Right (Ok _, ns)       ->
+          put ns >>
+            unless (readModeIsFile readMode)
+              (getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint)
   loop
 
 promptWithInput :: State String
 promptWithInput = do
+  readMode <- readMode <$> get
   mode <- mode <$> get
-  unless (mode == CompileMode) $
+  when (mode /= CompileMode && readMode == Repl) $
     liftIO do
       putStr prefix
       hFlush stdout
@@ -69,7 +85,15 @@ promptWithInput = do
 
 readInput :: String -> State String
 readInput buf = do
-  line <- trim <$> liftIO getLine
+  readMode <- readMode <$> get
+  file <- file <$> get
+  line <- trim <$> liftIO (if readMode == Repl
+    then
+      getLine
+    else
+      hGetLine (fromMaybe
+        (error "A handle should be provided if ReadMode is set to File")
+        file))
   mode <- mode <$> get
   case mode of
     CompileMode -> case lastS line of

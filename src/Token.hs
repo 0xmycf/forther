@@ -83,6 +83,10 @@ lexer line =
   in case headS hd of
     Nothing -> []
     Just ';' -> []
+    Just '#' -> case headS (drop 1 hd) of
+      Nothing -> []
+      Just '!' -> lexer $ drop 1 $ dropWhile (/= '\n') hd
+      _ -> lexer $ drop 1 hd  -- TODO this is where we have to add keywords etc later on
     Just '(' -> -- comments
       let rest = dropWhile (/= ')') hd in
       lexer $ drop 1 rest
