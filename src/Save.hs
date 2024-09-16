@@ -16,6 +16,7 @@ module Save
   ( takeS
   , dropS
   , headS
+  , lastS
   -- * other functions which are not in the Prelude but quite useful
   , orElse
   , toTuple
@@ -32,6 +33,10 @@ headS :: [a] -> Maybe a
 headS []    = Nothing
 headS (x:_) = Just x
 
+lastS :: [a] -> Maybe a
+lastS []     = Nothing
+lastS [x]    = Just x
+lastS (_:xs) = lastS xs
 
 -- | Is strict in the second argument
 --- >>> orElse (Just 1) 2

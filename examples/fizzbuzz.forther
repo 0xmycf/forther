@@ -1,7 +1,20 @@
-#! /usr/bin/env forther
+( #! /usr/bin/env forther )
 
-:emit println .
-:lp { "fizzbuzz" emit } { { "buzz" emit } { {"fizz" emit } { I emit } I 3 | if } I 5 | if } I 15 | if
-:loop { lp } 0 100 for
+:emit println . ;
+:lp 
+    { "fizzbuzz" emit } 
+    {
+        { "buzz" emit } 
+        { 
+            {"fizz" emit } 
+            { I emit } 
+            I 3 | if 
+        }
+        I 5 | if 
+    }
+    I 15 | if
+;
+
+:loop { lp } 0 100 for ;
 
 loop

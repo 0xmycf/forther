@@ -74,11 +74,15 @@ pattern Colon <- FWord ":"
 --
 -- >>> lexer "1 2 ( )"
 -- [FNumberT 1,FNumberT 2]
+-- 
+-- >>> lexer "1\n{\n 1 2 3 \n}\n\"some word\""
+-- [FNumberT 1,FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "some word"]
 lexer :: String -> [Token]
 lexer line =
   let hd = dropWhile isSpace line
   in case headS hd of
     Nothing -> []
+    Just ';' -> []
     Just '(' -> -- comments
       let rest = dropWhile (/= ')') hd in
       lexer $ drop 1 rest
@@ -159,6 +163,9 @@ lexList ls =
 -- |
 -- >>> takeList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
 -- ("\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}","")
+--
+-- >>> takeList "{ 1 2\n3 } 234"
+-- (" 1 2\n3 "," 234")
 takeList :: String -> (String, String)
 takeList = first reverse . go [] (0::Int)
   where

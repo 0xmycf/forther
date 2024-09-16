@@ -4,13 +4,18 @@ module Repl ( repl ) where
 import qualified BinTree           as BT
 import           Control.Exception (AsyncException(UserInterrupt),
                                     SomeException(SomeException), catch, try)
-import           Control.Monad     (forM_, void, when)
+import           Control.Monad     (forM_, unless, void, when)
 import           Data.Char         (isSpace)
-import           Dictionary        (DictEntry(..), Machine(..), def)
+import qualified Data.Char         as Char
+import           Data.Functor      (($>))
+import           Data.List         (dropWhileEnd)
+import           Dictionary        (DictEntry(..), FortherCompileMode(..),
+                                    Machine(..), def, setCompileMode,
+                                    setRunMode)
 import           Prelude           hiding (fail)
 import           Result            (Result(..), fail, lift, liftIO, orFailWith,
                                     pattern Err, pattern Ok)
-import           Save              (headS)
+import           Save              (headS, lastS)
 import           Stack             (Stack, StackElement(..), empty, pop,
                                     prettyPrint, push, toStackElement, toToken)
 import qualified State
@@ -30,21 +35,20 @@ bye = "\ESC[2K\ESC[0Ggoodbye"
 
 repl :: IO ()
 repl =
-  void (execState loop (Machine (def eval) empty))
+  void (execState loop (Machine (def eval) empty RunMode))
       -- `catch` (\(ErrorCall e) -> putStrLn e >> repl) -- this resets the dictionary so not good
       `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn bye)
       `catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
 
 loop :: State ()
 loop = do
-  liftIO do { putStr prefix; hFlush stdout }
-  line <- dropWhile isSpace <$> liftIO getLine
+  line <- promptWithInput
   case headS line of
     Nothing           -> pure ()
     Just c | c == ':' -> get >>= \oldState ->
       runResult (define line) >>= \case
-      Ok  dr' -> liftIO $ print dr'
-      Err e   -> liftIO (putStrLn e) >> put oldState
+        Ok  dr' -> liftIO $ print dr'
+        Err e   -> liftIO (putStrLn e) >> put oldState
     Just _ -> do
       oldState <- get
       res <- liftIO $ try $ runState (runResult (eval . lexer $ line)) oldState
@@ -53,6 +57,32 @@ loop = do
         Right (Err e, _)       -> liftIO (putStrLn e)
         Right (Ok _, ns)       -> put ns >> getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint
   loop
+
+promptWithInput :: State String
+promptWithInput = do
+  mode <- mode <$> get
+  unless (mode == CompileMode) $
+    liftIO do
+      putStr prefix
+      hFlush stdout
+  readInput ""
+
+readInput :: String -> State String
+readInput buf = do
+  line <- trim <$> liftIO getLine
+  mode <- mode <$> get
+  case mode of
+    CompileMode -> case lastS line of
+      Just ';' -> State.modify setRunMode $> buf <> line
+      _        -> readInput $ buf <> line <> " "
+    RunMode -> case headS line of
+      Just ':' -> case lastS line of
+        Just ';' -> pure $ buf <> line
+        _        -> State.modify setCompileMode >> readInput (buf <> line <> " ")
+      _        -> pure $ buf <> line
+
+trim :: String -> String
+trim = dropWhileEnd Char.isSpace .  dropWhile Char.isSpace
 
 getStack :: State (Stack StackElement)
 getStack = stack <$> get
@@ -104,13 +134,17 @@ execute (BuiltIn f)   = f {- do -}
 define :: String -> Res DefResult
 define str = do
   let str' = dropWhile (\e -> isSpace e || e `elem` [' ', ':']) str
-      (w, dropWhile isSpace -> rest) = span (/= ' ') str'
+      (w, trim -> rest) = span (/= ' ') str'
   when (null w) $ Result.fail "define: empty word"
   when (null rest) $ Result.fail "define: empty definition"
+  let rest' =
+          case lastS rest of
+            Just ';' -> init rest
+            _        -> rest
   case word w of
     Left reason -> Result.fail $ "define: " <> reason
     Right fword ->
-      dr w rest <$ Result.lift (State.modify $ \m -> rest `seq` m { dictionary = BT.insert fword (Literal rest) m.dictionary })
+      dr w rest' <$ Result.lift (State.modify $ \m -> rest' `seq` m { dictionary = BT.insert fword (Literal rest') m.dictionary })
 
 newtype DefResult
   = DefResult (String, String)

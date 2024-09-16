@@ -9,6 +9,9 @@ module Dictionary
   , DictEntry(..)
   -- * The Interpreter
   , Machine(..)
+  , FortherCompileMode(..)
+  , setCompileMode
+  , setRunMode
   ) where
 
 import           BinTree           (BinTree, insert, keys)
@@ -32,7 +35,19 @@ data Machine
   = Machine
       { dictionary :: Dict
       , stack      :: Stack StackElement
+      , mode       :: FortherCompileMode
       }
+
+data FortherCompileMode
+  = CompileMode
+  | RunMode
+  deriving (Eq)
+
+setCompileMode :: Machine -> Machine
+setCompileMode m = m { mode = CompileMode }
+
+setRunMode :: Machine -> Machine
+setRunMode m = m { mode = RunMode }
 
 data DictEntry
   = Literal String
