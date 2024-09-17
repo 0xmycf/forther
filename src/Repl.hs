@@ -3,31 +3,36 @@
 {-# HLINT ignore "Avoid lambda" #-}
 module Repl ( repl ) where
 
-import qualified BinTree           as BT
-import           Control.Exception (AsyncException(UserInterrupt),
-                                    SomeException(SomeException), catch, try)
-import           Control.Monad     (forM_, unless, void, when)
-import           Data.Char         (isSpace)
-import qualified Data.Char         as Char
-import           Data.Functor      (($>))
-import           Data.List         (dropWhileEnd)
-import           Data.Maybe        (fromMaybe)
-import           Dictionary        (DictEntry(..), FortherCompileMode(..),
-                                    Machine(..), ReadMode(..), def,
-                                    readModeIsFile, setCompileMode, setRunMode)
-import           Prelude           hiding (fail)
-import           Result            (Result(..), fail, lift, liftIO, orFailWith,
-                                    pattern Err, pattern Ok)
-import           Save              (headS, lastS)
-import           Stack             (Stack, StackElement(..), empty, pop,
-                                    prettyPrint, push, toStackElement, toToken)
+import qualified BinTree                as BT
+import           Control.Exception      (AsyncException(UserInterrupt),
+                                         SomeException(SomeException), catch,
+                                         try)
+import           Control.Monad          (forM_, unless, void, when)
+import           Data.Char              (isSpace)
+import qualified Data.Char              as Char
+import           Data.Functor           (($>))
+import           Data.List              (dropWhileEnd)
+import           Data.Maybe             (fromMaybe)
+import           Dictionary             (DictEntry(..), FortherCompileMode(..),
+                                         Machine(..), ReadMode(..), def,
+                                         readModeIsFile, setCompileMode,
+                                         setRunMode)
+import           Prelude                hiding (fail)
+import qualified Result
+import           Save                   (headS, lastS)
+import           Stack                  (Stack, StackElement(..), empty, pop,
+                                         prettyPrint, push, toStackElement,
+                                         toToken)
 import qualified State
-import           State             (execState, get, modify, put, runState)
-import           System.IO         (IOMode(ReadMode), hFlush, hGetLine, stdout,
-                                    withFile)
-import           System.IO.Error   (isEOFError)
-import           Token             (Token(..), lexer, pattern Colon,
-                                    pattern Exec, word)
+import           State                  (execState, get, modify, put, runState)
+import           System.IO              (IOMode(ReadMode), hFlush, hGetLine,
+                                         stdout, withFile)
+import           System.IO.Error        (isEOFError)
+import           Token                  (Token(..), pattern Colon, pattern Exec,
+                                         word)
+
+import           Control.Monad.IO.Class (liftIO)
+import           Lexer                  (lexer)
 
 type State a = State.State Machine IO a
 
@@ -58,19 +63,22 @@ loop = do
   case headS line of
     Nothing           -> pure ()
     Just c | c == ':' -> get >>= \oldState ->
-      runResult (define line) >>= \case
-        Ok  dr' -> liftIO $ print dr'
-        Err e   -> liftIO (putStrLn e) >> put oldState
+      Result.runResult (define line) >>= \case
+        Result.Ok  dr' -> Result.liftIO $ print dr'
+        Result.Err e   -> Result.liftIO (putStrLn e) >> put oldState
     Just _ -> do
       oldState <- get
-      res <- liftIO $ try $ runState (runResult (eval . lexer $ line)) oldState
-      case res of
-        Left (SomeException e) -> liftIO (print e)
-        Right (Err e, _)       -> liftIO (putStrLn e)
-        Right (Ok _, ns)       ->
-          put ns >>
-            unless (readModeIsFile readMode)
-              (getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint)
+      case lexer line of
+        Left err -> liftIO (putStrLn $ "Lexer error: " <> show err) >> put oldState
+        Right tokens -> do
+          res <- Result.liftIO $ try $ runState (Result.runResult (eval tokens)) oldState
+          case res of
+            Left (SomeException e) -> Result.liftIO (print e)
+            Right (Result.Err e, _)       -> Result.liftIO (putStrLn e)
+            Right (Result.Ok _, ns)       ->
+              put ns >>
+                unless (readModeIsFile readMode)
+                  (getStack >>= Result.liftIO . putStrLn . ("Stack: " <>) . prettyPrint)
   loop
 
 promptWithInput :: State String
@@ -78,7 +86,7 @@ promptWithInput = do
   readMode <- readMode <$> get
   mode <- mode <$> get
   when (mode /= CompileMode && readMode == Repl) $
-    liftIO do
+    Result.liftIO do
       putStr prefix
       hFlush stdout
   readInput ""
@@ -87,7 +95,7 @@ readInput :: String -> State String
 readInput buf = do
   readMode <- readMode <$> get
   file <- file <$> get
-  line <- trim <$> liftIO (if readMode == Repl
+  line <- trim <$> Result.liftIO (if readMode == Repl
     then
       getLine
     else
@@ -118,7 +126,7 @@ setStack :: (Stack' -> Stack') -> Machine -> Machine
 setStack new m = m { stack = new m.stack }
 {-# INLINE setStack #-}
 
-type Res = Result String (State.State Machine IO)
+type Res = Result.Result String (State.State Machine IO)
 
 eval :: [Token] -> Res ()
 eval ws = forM_ ws translate
@@ -127,27 +135,30 @@ eval ws = forM_ ws translate
     translate = \case
       -- TODO leave this here?
       FWordT Exec -> do
-        stack <- stack <$> lift get
-        (!ls, !rest) <- pop stack `orFailWith` "eval: exec: StackUnderflow"
-        lift $ modify $ setStack $ const rest
+        stack <- stack <$> Result.lift get
+        (!ls, !rest) <- pop stack `Result.orFailWith` "eval: exec: StackUnderflow"
+        Result.lift $ modify $ setStack $ const rest
         case ls of
           List ts -> eval (map toToken ts)
-          _       -> fail "eval: exec: not a list"
+          _       -> Result.fail "eval: exec: not a list"
       -- TODO this is for debugging
       FWordT Colon -> Result.fail "eval: : not allowed in this context"
       FWordT w   -> do
-        dict <- dictionary <$> lift get
+        dict <- dictionary <$> Result.lift get
         case dict `BT.lookup` w of
           Just entry -> execute entry
-          Nothing    -> fail $ "eval: word not found in dictionary: " <> show w
+          Nothing    -> Result.fail $ "eval: word not found in dictionary: " <> show w
       tkn -> modifyStack (toStackElement tkn)
 
 modifyStack :: StackElement -> Res ()
-modifyStack = lift . modify . setStack . push
+modifyStack = Result.lift . modify . setStack . push
 {-# INLINE modifyStack #-}
 
 execute :: DictEntry -> Res ()
-execute (Literal str) = eval $ lexer str
+execute (Literal str) =
+  case lexer str of
+    Left err     -> Result.fail $ "execute: " <> show err
+    Right tokens -> eval tokens
 execute (BuiltIn f)   = f {- do -}
   -- s <- lift get
   -- foo <- liftIO $ runState (runResult f) s `catch` \(SomeException e) -> error (show e <> " sljfljfd ")

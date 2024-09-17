@@ -151,6 +151,7 @@ instance Show StackElement where
     Text t    -> t
     Word t    -> show t
 
+-- | TODO may error if trying ot convert a keyword
 toStackElement :: Token -> StackElement
 toStackElement = \case
   FNumberT n -> Exact n
@@ -159,6 +160,7 @@ toStackElement = \case
   FBoolT b   -> Boolean b
   FListT ls  -> List (map toStackElement ls)
   FWordT w   -> Word w
+  FKeywordT _ -> error "toStackElement: not defined for keywords"
 
 toToken :: StackElement -> Token
 toToken = \case

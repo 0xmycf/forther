@@ -197,6 +197,8 @@ fortherFor eval = get >>= \m ->
         _  -> Result.fail "Not enough matching elements on the stack"
 
 -- | TODO remove eval parameter
+-- TODO ; should be a word
+--    to properly define this, we would need to work with the tokens instead of the strings 
 def :: Eval -> Dict
 def eval =
     let i = insert

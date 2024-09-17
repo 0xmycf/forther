@@ -63,6 +63,7 @@ library
     BinTree
     Dictionary
     Token
+    Lexer
     Repl
     State
     Result
