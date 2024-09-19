@@ -32,7 +32,7 @@ import           Token                  (Token(..), pattern Colon, pattern Exec,
                                          word)
 
 import           Control.Monad.IO.Class (liftIO)
-import           Lexer                  (lexer)
+import           Lexer                  (lexer, lexerS)
 
 type State a = State.State Machine IO a
 
@@ -68,7 +68,7 @@ loop = do
         Result.Err e   -> Result.liftIO (putStrLn e) >> put oldState
     Just _ -> do
       oldState <- get
-      case lexer line of
+      case lexerS line of
         Left err -> liftIO (putStrLn $ "Lexer error: " <> show err) >> put oldState
         Right tokens -> do
           res <- Result.liftIO $ try $ runState (Result.runResult (eval tokens)) oldState
@@ -156,7 +156,7 @@ modifyStack = Result.lift . modify . setStack . push
 
 execute :: DictEntry -> Res ()
 execute (Literal str) =
-  case lexer str of
+  case lexerS str of
     Left err     -> Result.fail $ "execute: " <> show err
     Right tokens -> eval tokens
 execute (BuiltIn f)   = f {- do -}

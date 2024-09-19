@@ -67,6 +67,8 @@ library
     Repl
     State
     Result
+    IOBuffer
+    CharProducer
   build-depends:    
       base ^>=4.18.2.0
     , deepseq

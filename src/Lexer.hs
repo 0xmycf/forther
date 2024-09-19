@@ -9,14 +9,26 @@ Maintainer  : mycf.mycf.mycf@gmail.com
 Stability   : experimental
 Portability : POSIX
 }}}-}
-module Lexer ( lexer, LexingResult, LexingError(..) ) where
+module Lexer
+  ( lexer
+  , lexerS
+  , lexerIO
+  , LexingResult
+  , LexingError(..)
+  ) where
 
-import           Control.Monad (foldM, when)
-import           Data.Char     (isSpace)
-import           Data.Functor  (void, ($>))
-import           Data.Maybe    (fromJust, isJust)
+import           CharProducer          (CharProducer(..))
+import           Control.Monad         (foldM, when)
+import           Data.Char             (isSpace)
+import           Data.Functor          (void, ($>))
+import           Data.Functor.Identity (Identity, runIdentity)
+import           Data.Maybe            (fromJust, isJust)
+import           IOBuffer              (IOBuffer, withBuffer)
+import qualified Result
+import           Result                (Result)
 import qualified State
-import           Token         (Token(..), word)
+import           System.IO             (Handle)
+import           Token                 (Token(..), word)
 
 -- Setup for doctests
 --
@@ -24,31 +36,54 @@ import           Token         (Token(..), word)
 -- import Data.Char (isSpace)
 -- import Data.Bifunctor
 
--- |
--- The lexer defines a semigroup and monoid instance.
--- The semigroup is binary function combines the tokens of the two lexers and
--- sets the line number to the maximum of the two lexers, the column to 0.
--- You probably dont want to use that
---
--- this malformed instance probably means that I dont do this the correct way
-data LexerState
+-- | A mutable 'String' Monad, where mutability is emulated using a 'State' transformer
+newtype MString a
+  = MString { withString' :: State.State String Identity a }
+  deriving newtype (Applicative, Functor, Monad)
+
+withString :: String -> MString a -> a
+withString s mstr = runIdentity $ State.evalState (withString' mstr) s
+{-# INLINE withString #-}
+
+instance CharProducer MString where
+  produceChar = MString $ do
+    s <- State.get
+    case s of
+      []     -> pure Nothing
+      (x:xs) -> State.put xs $> Just x
+
+  peekChar = MString $ do
+    s <- State.get
+    case s of
+      []    -> pure Nothing
+      (x:_) -> pure $ Just x
+
+-- | The interal state of the Lexer
+data LexerState m
   = LexerState
-      { input  :: String
-        -- ^ the input string. possibly empty
-      , tokens :: [Token]
+      { produce :: m (Maybe Char)
+        -- ^ The input source. If it produces 'Nothing' the source is exhausted.
+      , peek    :: m (Maybe Char)
+        -- ^ The next char in the input source. Does not consume the char.
+        -- as with 'produce' if it produces 'Nothing' the source is exhausted.
+      , tokens  :: [Token]
         -- ^ the list of already written Tokens ( TODO not sure if I should keep this )
-      , column :: Int
+      , column  :: Int
         -- ^ The current column the lexer is in
-      , line   :: Int
+      , line    :: Int
         -- ^ The current line the lexer is in
       }
-  deriving (Show)
 
-pos :: LexerState -> (Row, Col)
+pos :: LexerState m  -> (Row, Col)
 pos st = (st.line, st.column)
+{-# INLINE pos #-}
 
-defaultLexerState :: String -> LexerState
-defaultLexerState source = LexerState source [] 0 0
+type Produce m = m (Maybe Char)
+type Peek m = m (Maybe Char)
+
+defaultLexerState :: Produce m -> Peek m -> LexerState m
+defaultLexerState source peek = LexerState source peek [] 0 0
+{-# INLINE defaultLexerState #-}
 
 type Col = Int
 type Row = Int
@@ -76,119 +111,161 @@ data LexingErrorType
   | EmptyKeyword
   deriving (Show)
 
-newtype Lexer a
-  = Lexer { runLexer' :: State.State LexerState (Either LexingError) a }
+newtype Lexer m a
+  = Lexer { runLexer' :: State.State (LexerState m) (Result LexingError m) a }
   deriving newtype (Applicative, Functor, Monad)
 
-instance MonadFail Lexer where
+instance Monad m => MonadFail (Lexer m) where
   fail s = failWith (GeneralError s)
 
 type LexingResult = Either LexingError [Token]
 
-runLexer :: String -> Lexer a -> Either LexingError (a, LexerState)
-runLexer source = flip State.runState (defaultLexerState source) . runLexer'
+-- | Lexees a String
+stringLexer :: String
+            -> Lexer MString a
+            -> Either LexingError (a, LexerState MString)
+stringLexer source =
+  withString source .
+    runLexer
+      produceChar
+      peekChar
+{-# INLINE lexString #-}
 
-evalLexer :: String -> Lexer a -> Either LexingError a
-evalLexer source l = fst <$> runLexer source l
+-- | Lexes a file or some other handle (e.g. stdin)
+handleLexer :: Handle
+            -> Lexer IOBuffer a
+            -> IO (Either LexingError (a, LexerState IOBuffer))
+handleLexer h = withBuffer h . runLexer produceChar peekChar
+{-# INLINE handleLexer #-}
+
+runLexer :: Monad m
+         => Produce m
+         -> Peek m
+         -> Lexer m a
+         -> m (Either LexingError (a, LexerState m))
+runLexer source peek = Result.runResult
+                . flip State.runState (defaultLexerState source peek)
+                . runLexer'
+{-# INLINE runLexer #-}
+
+evalLexer :: Monad m
+          => Produce m
+          -> Peek m
+          -> Lexer m a
+          -> m (Either LexingError a)
+evalLexer source peek l = fmap fst <$> runLexer source peek l
+{-# INLINE evalLexer #-}
+
+lift :: Monad m
+     => m a
+     -> Lexer m a
+lift = Lexer . State.lift . Result.lift
+{-# INLINE lift #-}
 
 -- | returns the current state of the lexer
-get :: Lexer LexerState
+get :: Monad m => Lexer m (LexerState m)
 get = Lexer State.get
+{-# INLINE get #-}
 
-put :: LexerState -> Lexer ()
+put :: Monad m => LexerState m -> Lexer m ()
 put = Lexer . State.put
+{-# INLINE put #-}
 
-failWith :: LexingErrorType -> Lexer a
+failErr :: Monad m => LexingError -> Lexer m a
+failErr = Lexer . State.lift . Result.fail
+{-# INLINE failErr #-}
+
+failWith :: Monad m => LexingErrorType -> Lexer m a
 failWith errorType =
   get >>= \st ->
-    Lexer . State.lift . Left $ LexingError errorType st.line st.column
+    failErr $ LexingError errorType st.line st.column
 
-failErr :: LexingError -> Lexer a
-failErr err = Lexer . State.lift $ Left err
-
-write :: Token -> Lexer ()
+write :: Monad m => Token -> Lexer m ()
 write tkn = do
   st <- get
   put $ st { tokens = tkn : st.tokens  }
 
 -- | increments the current line number by one
 -- and sets the col number to 0
-incLine :: Lexer ()
+incLine :: Monad m => Lexer m ()
 incLine = do
   st <- get
   put st { line = st.line + 1, column = 0 }
 
 -- | increments the current column by one
-incCol :: Lexer ()
+incCol :: Monad m => Lexer m ()
 incCol = do
   st <- get
   put st { column = st.column + 1 }
 
+advanceC :: Monad m => Char -> Lexer m ()
+advanceC = \case
+  '\n' -> incLine
+  _    -> incCol
+{-# INLINE advanceC #-}
 
 -- | Does not remove chars from the input.
 -- Only advances the column and line counters
 --
--- >>> pos . snd <$> runLexer "" (advance "")
+-- >>> pos . snd <$> stringLexer "" (advance "")
 -- Right (0,0)
 --
--- >>> pos . snd <$> runLexer "" (advance "123\n345")
+-- >>> pos . snd <$> stringLexer "" (advance "123\n345")
 -- Right (1,3)
 --
--- >>> pos . snd <$> runLexer "" (advance "123\n345\n")
+-- >>> pos . snd <$> stringLexer "" (advance "123\n345\n")
 -- Right (2,0)
-advance :: String -> Lexer ()
-advance = do
-  mapM_ (\case
-    '\n' -> incLine
-    _ -> incCol)
+advance :: Monad m => String -> Lexer m ()
+advance = mapM_ advanceC
+{-# INLINE advance #-}
 
 -- | The next char is the good case, the bad case is the error
 --
--- >>> input . snd <$> runLexer "    foo" dropWhitespace
--- Right "foo"
---
--- >>> fst <$> runLexer "foo" nextChar
+-- >>> fst <$> stringLexer "foo" nextChar
 -- Right 'f'
-next :: (Char -> b) -- ^ what happens in the good case
-     -> Lexer b -- ^ what happens in the bad case
-     -> Lexer b -- ^ the result
+next :: Monad m
+     => (Char -> b) -- ^ what happens in the good case
+     -> Lexer m b -- ^ what happens in the bad case
+     -> Lexer m b -- ^ the result
 next good bad = do
   st <- get
-  case st.input of
-    [] -> bad
-    (x:xs) -> do
-      put st { input = xs }
-      advance [x]
-      pure (good x)
+  c <- lift st.produce
+  case c of
+    Nothing -> bad
+    Just c' -> advanceC c' $> good c'
 
-dropWhitespace :: Lexer ()
+-- >>> input . snd <$> stringLexer "    foo" dropWhitespace
+-- Right "foo"
+dropWhitespace :: Monad m => Lexer m ()
 dropWhitespace = dropWhileL isSpace
+{-# INLINE dropWhitespace #-}
 
-nextChar :: Lexer Char
+nextChar :: Monad m => Lexer m Char
 nextChar = next id (failWith UnexpectedEOF)
+{-# INLINE nextChar #-}
 
 -- | Returns the next char without consuming it from the input.
 --
--- >>> fst <$> runLexer "foo" peekNextChar
+-- >>> fst <$> stringLexer "foo" peekNextChar
 -- Right (Just 'f')
 --
--- >>> fst <$> runLexer "" peekNextChar
+-- >>> fst <$> stringLexer "" peekNextChar
 -- Right Nothing
-peekNextChar :: Lexer (Maybe Char)
+peekNextChar :: Monad m => Lexer m (Maybe Char)
 peekNextChar = do
   st <- get
-  case st.input of
-    []    -> pure Nothing
-    (x:_) -> pure $ pure x
+  lift st.peek
 
-dropTakeHelper ::  Either Int (Char -> Bool) -> Lexer String
+dropTakeHelper :: Monad m
+               => Either Int (Char -> Bool)
+               -> Lexer m String
 dropTakeHelper = \case
-  Left n          ->
+  Left n ->
     reverse <$>
       foldM (\acc _ ->
-          peekNextChar >>= \case
-            Nothing -> pure acc
-            Just c -> nextChar $> c:acc) [] [1..n]
+        peekNextChar >>= \case
+          Nothing -> pure acc
+          Just c -> nextChar $> c:acc) [] [1..n]
   Right predicate ->
     let loop acc = do {
       c <- peekNextChar;
@@ -198,43 +275,43 @@ dropTakeHelper = \case
     }
     in loop []
 
--- >>> Data.Bifunctor.second input <$> runLexer "\t\v \nbar" (dropWhileL isSpace)
+-- >>> Data.Bifunctor.second input <$> stringLexer "\t\v \nbar" (dropWhileL isSpace)
 -- Right ((),"bar")
 --
--- >>> Data.Bifunctor.second input <$> runLexer "foo\nbar" (dropWhileL (not . isSpace))
+-- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (dropWhileL (not . isSpace))
 -- Right ((),"\nbar")
-dropWhileL :: (Char -> Bool) -> Lexer ()
+dropWhileL :: Monad m => (Char -> Bool) -> Lexer m ()
 dropWhileL predicate = void (dropTakeHelper (Right predicate))
 
--- >>> Data.Bifunctor.second input <$> runLexer "foo\nbar" (dropL 3)
+-- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (dropL 3)
 -- Right ((),"\nbar")
-dropL :: Int -> Lexer () -- TODO TEST
+dropL :: Monad m => Int -> Lexer m ()
 dropL = void . dropTakeHelper . Left
 
--- >>> Data.Bifunctor.second input <$> runLexer "foo\nbar" (takeWhileL (not . isSpace))
+-- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (takeWhileL (not . isSpace))
 -- Right ("foo","\nbar")
 --
--- >>> Data.Bifunctor.second input <$> runLexer "\t\v \nbar" (takeWhileL isSpace)
+-- >>> Data.Bifunctor.second input <$> stringLexer "\t\v \nbar" (takeWhileL isSpace)
 -- Right ("\t\v \n","bar")
-takeWhileL :: (Char -> Bool) -> Lexer String
+takeWhileL :: Monad m => (Char -> Bool) -> Lexer m String
 takeWhileL predicate = dropTakeHelper (Right predicate)
 
 -- | Either returns the next 'Char' or 'Nothing'. Consumes one char.
 --
--- >>> fst <$> runLexer "foo" maybeNextChar
+-- >>> fst <$> stringLexer "foo" maybeNextChar
 -- Right (Just 'f')
 --
--- >>> fst <$> runLexer "" maybeNextChar
+-- >>> fst <$> stringLexer "" maybeNextChar
 -- Right Nothing
-maybeNextChar :: Lexer (Maybe Char)
+maybeNextChar :: Monad m => Lexer m (Maybe Char)
 maybeNextChar = next Just (pure Nothing)
 
 -- | Gets the next token from the input.
 -- Token here means a vim like word (iw).
-nextToken :: Lexer String
+nextToken :: Monad m => Lexer m String
 nextToken = takeWhileL (not . isSpace)
 
--- | TODO FIXME recieves the full line
+-- Lexes the input source 'Monad' (m (Maybe Char)) and returns the list of tokens.
 --
 -- >>> lexer "1 2 3"
 -- Right [FNumberT 1,FNumberT 2,FNumberT 3]
@@ -271,10 +348,22 @@ nextToken = takeWhileL (not . isSpace)
 --
 -- >>> lexer "#foo"
 -- Right [FKeywordT "foo"]
-lexer :: String -> LexingResult
-lexer line = reverse . tokens .  snd <$> runLexer line lexer'
+lexer :: Monad m
+      => Produce m
+      -> Peek m
+      -> m LexingResult
+lexer produce peek = fmap (reverse . tokens . snd) <$> runLexer produce peek lexer'
+{-# INLINE lexer #-}
 
-lexer' :: Lexer ()
+lexerS :: String -> LexingResult
+lexerS string = reverse . tokens . snd <$> stringLexer string lexer'
+{-# INLINE lexerS #-}
+
+lexerIO :: Handle -> IO LexingResult
+lexerIO h = fmap (reverse . tokens . snd) <$> handleLexer h lexer'
+{-# INLINE lexerIO #-}
+
+lexer' :: Monad m => Lexer m ()
 lexer' = do
   dropWhitespace
   may_hd <- peekNextChar
@@ -309,23 +398,23 @@ lexer' = do
     Just _ -> nextToken >>= mkWord >>= write
   when (isJust may_hd) lexer'
 
--- | Construct a word token. Fails the Lexer if the word is malformed.
+-- | Construct a word token. Fails the Lexer m  if the word is malformed.
 -- Does not consume the word. Thus the proper way to use this is:
 --
--- >>> pos . snd <$> runLexer "foo" (nextToken >>= mkWord)
+-- >>> pos . snd <$> stringLexer "foo" (nextToken >>= mkWord)
 -- Right (0,3)
 --
 -- Compare this with:
 --
--- >>> (\s -> (s.input, s.line, s.column)) . snd <$> runLexer "foo" (mkWord "foo")
+-- >>> (\s -> (s.input, s.line, s.column)) . snd <$> stringLexer "foo" (mkWord "foo")
 -- Right ("foo",0,0)
 --
--- >>> fst <$> runLexer "" (mkWord "foo")
+-- >>> fst <$> stringLexer "" (mkWord "foo")
 -- Right (FWordT :foo)
 --
--- >>> runLexer "" (mkWord "123")
+-- >>> stringLexer "" (mkWord "123")
 -- Left (LexingError {_type = GeneralError {message = "lexer: word: cannot start with a number or hypthen"}, row = 0, col = 0})
-mkWord :: String -> Lexer Token
+mkWord :: Monad m => String -> Lexer m Token
 mkWord w = case word w of
   Right w'    -> pure $ FWordT w'
   Left reason -> fail $ "lexer: " <> reason
@@ -335,12 +424,14 @@ mkWord w = case word w of
 -- True
 isInt :: Char -> Bool
 isInt c = c `elem` ['0'..'9'] || c == '-'
+{-# INLINE isInt #-}
 
 -- | Predicate for matching a double
 -- >>> all isDoubleOrNum ([ '0'..'9'] ++ ['-', '.', 'e'])
 -- True
 isDoubleOrNum :: Char -> Bool
 isDoubleOrNum c = isInt c || c == '.' || c == 'e'
+{-# INLINE isDoubleOrNum #-}
 
 -- | Predicate for matching a double without checking isInt
 -- >>> isDouble' '.'
@@ -350,27 +441,29 @@ isDoubleOrNum c = isInt c || c == '.' || c == 'e'
 -- True
 isDouble' :: Char -> Bool
 isDouble' c = c == '.' || c == 'e'
+{-# INLINE isDouble' #-}
 
 -- | Token ~ FListT
 --
--- >>> fst <$> runLexer "{}" lexList
+-- >>> fst <$> stringLexer "{}" lexList
 -- Right (FListT [])
 --
--- >>> fst <$> runLexer "{1}" lexList
+-- >>> fst <$> stringLexer "{1}" lexList
 -- Right (FListT [FNumberT 1])
 --
--- >>> fst <$> runLexer "{123 31}" lexList
+-- >>> fst <$> stringLexer "{123 31}" lexList
 -- Right (FListT [FNumberT 123,FNumberT 31])
 --
--- >>> fst <$> runLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" lexList
+-- >>> fst <$> stringLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" lexList
 -- Right (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]])
 --
--- >>> input . snd <$> runLexer "{ 1 2 3 } 234" lexList
+-- >>> input . snd <$> stringLexer "{ 1 2 3 } 234" lexList
 -- Right " 234"
-lexList :: Lexer Token
+lexList :: Monad m => Lexer m Token
 lexList = do
   lst <- takeList
-  case lexer lst of
+  let foo = withString lst $ lexer produceChar peekChar
+  case foo of
     Right liste -> pure $ FListT liste
     Left err    -> failErr err
 
@@ -381,16 +474,16 @@ lexList = do
 -- >>> evalLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" takeList
 -- Right "\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}"
 --
--- >>> Data.Bifunctor.second input <$> runLexer "{ 1 2\n3 } 234" takeList
+-- >>> Data.Bifunctor.second input <$> stringLexer "{ 1 2\n3 } 234" takeList
 -- Right (" 1 2\n3 "," 234")
 --
 -- >>> evalLexer "{ 1 2\n3 234" takeList
 -- Left (LexingError {_type = UnterminatedList, row = 1, col = 5})
-takeList :: Lexer String
+takeList :: Monad m => Lexer m String
 takeList = do
   reverse <$> go [] (0::Int)
   where
-    go :: String -> Int -> Lexer String
+    go :: Monad m => String -> Int -> Lexer m String
     go acc n = do
       may_hd <- maybeNextChar
       case may_hd of
@@ -408,21 +501,21 @@ takeList = do
 -- >>> '\"' == '"'
 -- True
 --
--- >>> fst <$> runLexer "foo\"" lexString
+-- >>> fst <$> stringLexer "foo\"" lexString
 -- Right (FTextT "foo")
 --
--- >>> fst <$> runLexer "\"foo\"" lexString
+-- >>> fst <$> stringLexer "\"foo\"" lexString
 -- Right (FTextT "foo")
 --
--- >>> fst <$> runLexer "\"foo\"bar" lexString
+-- >>> fst <$> stringLexer "\"foo\"bar" lexString
 -- Right (FTextT "foo")
 --
--- >>> (input . snd) <$> runLexer "\"foo\"bar" lexString
+-- >>> (input . snd) <$> stringLexer "\"foo\"bar" lexString
 -- Right "bar"
 --
--- >>> fst <$> runLexer "\"foo\\\"bar\"" lexString
+-- >>> fst <$> stringLexer "\"foo\\\"bar\"" lexString
 -- Right (FTextT "foo\\\"bar")
-lexString :: Lexer Token
+lexString :: Monad m => Lexer m Token
 lexString = do
   -- removing the first quote if it exists
   hd <- peekNextChar
