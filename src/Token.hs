@@ -16,7 +16,10 @@ module Token
   , pattern Colon
   , word
   ) where
+
 import           Control.DeepSeq (NFData)
+import           Data.String     (IsString(..))
+import           Lexer           (lexerS)
 
 -- | Use the smart constructor `word` instead
 -- An FWord should never be longer than 10 chars
@@ -53,4 +56,10 @@ data Token where
   FListT :: ![Token] -> Token -- ^ A stack
   FKeywordT :: !String -> Token -- ^ A keyword. All keywords start with #, which is not included in the String
   deriving (Show)
+
+instance IsString [Token] where
+  fromString :: String -> [Token]
+  fromString s = case lexerS s of
+    Right (tokens, _) -> tokens
+    Left _            -> []
 

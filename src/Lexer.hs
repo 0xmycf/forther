@@ -15,18 +15,20 @@ module Lexer
   , LexingError(..)
   ) where
 
-import           CharProducer          (CharProducer(..))
-import           Control.Monad         (foldM, when)
-import           Data.Char             (isSpace)
-import           Data.Functor          (void, ($>))
-import           Data.Functor.Identity (Identity, runIdentity)
-import           Data.Maybe            (fromJust, isJust)
-import           IOPeekBuffer          (IOPeekBuffer, withBuffer)
-import qualified Result
-import           Result                (Result)
-import qualified State
-import           System.IO             (Handle)
-import           Token                 (Token(..), word)
+import                          CharProducer          (CharProducer(..))
+import                          Control.Monad         (foldM, when)
+import                          Data.Char             (isSpace)
+import                          Data.Functor          (void, ($>))
+import                          Data.Functor.Identity (Identity, runIdentity)
+import                          Data.Maybe            (fromJust, isJust)
+import                          IOPeekBuffer          (IOPeekBuffer, withBuffer)
+import                qualified Result
+import                          Result                (Result)
+import                qualified State
+import                          System.IO             (Handle)
+-- this is needed so we dont have a cyclic dependency
+-- (for the IsString instance for [Token] (see src/Token.hs))
+import {-# SOURCE #-}           Token                 (Token(..), word)
 
 -- Setup for doctests
 --
@@ -380,7 +382,7 @@ lexer' = do
 -- >>> (\s -> (s.line, s.column)) . snd <$> stringLexer "foo" (nextToken >>= mkWord)
 -- Right (0,3)
 --
--- Compare this with (not that 'leftover' causes the lexer to advance to the end of the input 
+-- Compare this with (not that 'leftover' causes the lexer to advance to the end of the input
 --
 -- >>> (\(rest,st) -> (rest, st.line, st.column)) <$> stringLexer "foo" (mkWord "foo" >> leftover)
 -- Right ("foo",0,3)

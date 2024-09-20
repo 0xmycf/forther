@@ -20,7 +20,6 @@ or query the 'Handle' for more data.
 module IOPeekBuffer
   ( IOPeekBuffer
   , withBuffer
-  , CharProducer(..)
   ) where
 
 import           CharProducer      (CharProducer(..))
