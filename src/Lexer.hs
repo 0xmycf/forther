@@ -9,8 +9,7 @@ Stability   : experimental
 Portability : POSIX
 }}}-}
 module Lexer
-  ( lexer
-  , lexerS
+  ( lexerS
   , lexerIO
   , LexingResult
   , LexingError(..)
@@ -282,47 +281,43 @@ maybeNextChar = next Just (pure Nothing)
 nextToken :: Monad m => Lexer m String
 nextToken = takeWhileL (not . isSpace)
 
--- Lexes the input source 'Monad' (m (Maybe Char)) and returns the list of tokens.
+-- | Lexes the input source 'Monad' (m (Maybe Char)) and returns the list of tokens.
 --
--- >>> lexer "1 2 3"
+-- >>> fst <$> lexerS "1 2 3"
 -- Right [FNumberT 1,FNumberT 2,FNumberT 3]
 --
--- >>> lexer "1 2 3 \"b\\ar\""
+-- >>> fst <$> lexerS "1 2 3 \"b\\ar\""
 -- Right [FNumberT 1,FNumberT 2,FNumberT 3,FTextT "b\\ar"]
 --
--- >>> lexer "123 2132 30103 2322"
+-- >>> fst <$> lexerS "123 2132 30103 2322"
 -- Right [FNumberT 123,FNumberT 2132,FNumberT 30103,FNumberT 2322]
 --
--- >>> lexer "1 2 print"
+-- >>> fst <$> lexerS "1 2 print"
 -- Right [FNumberT 1,FNumberT 2,FWordT :print]
 --
--- >>> lexer "-2"
+-- >>> fst <$> lexerS "-2"
 -- Right [FNumberT (-2)]
 --
--- >>> lexer "{-2 {\"some string - 2\"}}"
+-- >>> fst <$> lexerS "{-2 {\"some string - 2\"}}"
 -- Right [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
 --
--- >>> lexer "{ I } 2"
+-- >>> fst <$> lexerS "{ I } 2"
 -- Right [FListT [FWordT :I],FNumberT 2]
 --
--- >>> lexer "{ } 2"
+-- >>> fst <$> lexerS "{ } 2"
 -- Right [FListT [],FNumberT 2]
 --
--- >>> lexer "( { } )"
+-- >>> fst <$> lexerS "( { } )"
 -- Right []
 --
--- >>> lexer "1 2 ( )"
+-- >>> fst <$> lexerS "1 2 ( )"
 -- Right [FNumberT 1,FNumberT 2]
 --
--- >>> lexer "1\n{\n 1 2 3 \n}\n\"some word\""
+-- >>> fst <$> lexerS "1\n{\n 1 2 3 \n}\n\"some word\""
 -- Right [FNumberT 1,FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "some word"]
 --
--- >>> lexer "#foo"
+-- >>> fst <$> lexerS "#foo"
 -- Right [FKeywordT "foo"]
-lexer :: CharProducer m => m LexingResult
-lexer = fmap ((, Nothing) . reverse . tokens . snd) <$> runLexer lexer'
-{-# INLINE lexer #-}
-
 lexerS :: String -> LexingResult
 lexerS string = do
   (rest, st) <- stringLexer string (lexer' >> leftover)
@@ -443,7 +438,7 @@ isDouble' c = c == '.' || c == 'e'
 lexList :: Monad m => Lexer m Token
 lexList = do
   lst <- takeList
-  let foo = withString lst lexer
+  let foo = lexerS lst
   case foo of
     Right (liste, _) -> pure $ FListT liste
     Left err         -> failErr err
