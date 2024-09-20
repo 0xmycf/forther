@@ -67,7 +67,7 @@ library
     Repl
     State
     Result
-    IOBuffer
+    IOPeekBuffer
     CharProducer
   build-depends:    
       base ^>=4.18.2.0

@@ -1,5 +1,4 @@
 {-# LANGUAGE ViewPatterns #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 {-| Haddock {{{
 Module      : Lexer
 Description : The lexer for the forhter language
@@ -23,7 +22,7 @@ import           Data.Char             (isSpace)
 import           Data.Functor          (void, ($>))
 import           Data.Functor.Identity (Identity, runIdentity)
 import           Data.Maybe            (fromJust, isJust)
-import           IOBuffer              (IOBuffer, withBuffer)
+import           IOPeekBuffer          (IOPeekBuffer, withBuffer)
 import qualified Result
 import           Result                (Result)
 import qualified State
@@ -67,29 +66,20 @@ data LexerState m
         -- ^ The next char in the input source. Does not consume the char.
         -- as with 'produce' if it produces 'Nothing' the source is exhausted.
       , tokens  :: [Token]
-        -- ^ the list of already written Tokens ( TODO not sure if I should keep this )
+        -- ^ the list of already written Tokens
       , column  :: Int
         -- ^ The current column the lexer is in
       , line    :: Int
         -- ^ The current line the lexer is in
       }
 
-pos :: LexerState m  -> (Row, Col)
-pos st = (st.line, st.column)
-{-# INLINE pos #-}
-
-type Produce m = m (Maybe Char)
-type Peek m = m (Maybe Char)
-
-defaultLexerState :: Produce m -> Peek m -> LexerState m
-defaultLexerState source peek = LexerState source peek [] 0 0
+defaultLexerState :: CharProducer m => LexerState m
+defaultLexerState = LexerState produceChar peekChar [] 0 0
 {-# INLINE defaultLexerState #-}
 
 type Col = Int
 type Row = Int
 
--- | TODO make a general error type that wraps these sepcialised ones
--- so I dont have to repeat the col and rows all the time
 data LexingError
   = LexingError
       { _type :: LexingErrorType
@@ -118,43 +108,34 @@ newtype Lexer m a
 instance Monad m => MonadFail (Lexer m) where
   fail s = failWith (GeneralError s)
 
-type LexingResult = Either LexingError [Token]
+-- | The result of the lexer.
+-- It is either a 'LexingError' if some error was encounterd during the lexing phase
+-- or a list of 'Token's and possibly the leftover 'String' of the input.
+--
+-- Only the 'MString' Monad is able to produce a 'String' as leftover.
+type LexingResult = Either LexingError ([Token], Maybe String)
+
+runLexer :: CharProducer m
+         => Lexer m a
+         -> m (Either LexingError (a, LexerState m))
+runLexer = Result.runResult
+                . flip State.runState defaultLexerState
+                . runLexer'
+{-# INLINE runLexer #-}
 
 -- | Lexees a String
 stringLexer :: String
             -> Lexer MString a
             -> Either LexingError (a, LexerState MString)
-stringLexer source =
-  withString source .
-    runLexer
-      produceChar
-      peekChar
+stringLexer source = withString source . runLexer
 {-# INLINE lexString #-}
 
 -- | Lexes a file or some other handle (e.g. stdin)
 handleLexer :: Handle
-            -> Lexer IOBuffer a
-            -> IO (Either LexingError (a, LexerState IOBuffer))
-handleLexer h = withBuffer h . runLexer produceChar peekChar
+            -> Lexer IOPeekBuffer a
+            -> IO (Either LexingError (a, LexerState IOPeekBuffer))
+handleLexer h = withBuffer h . runLexer
 {-# INLINE handleLexer #-}
-
-runLexer :: Monad m
-         => Produce m
-         -> Peek m
-         -> Lexer m a
-         -> m (Either LexingError (a, LexerState m))
-runLexer source peek = Result.runResult
-                . flip State.runState (defaultLexerState source peek)
-                . runLexer'
-{-# INLINE runLexer #-}
-
-evalLexer :: Monad m
-          => Produce m
-          -> Peek m
-          -> Lexer m a
-          -> m (Either LexingError a)
-evalLexer source peek l = fmap fst <$> runLexer source peek l
-{-# INLINE evalLexer #-}
 
 lift :: Monad m
      => m a
@@ -198,25 +179,18 @@ incCol = do
   st <- get
   put st { column = st.column + 1 }
 
-advanceC :: Monad m => Char -> Lexer m ()
-advanceC = \case
-  '\n' -> incLine
-  _    -> incCol
-{-# INLINE advanceC #-}
-
 -- | Does not remove chars from the input.
 -- Only advances the column and line counters
 --
--- >>> pos . snd <$> stringLexer "" (advance "")
--- Right (0,0)
+-- >>> (\s -> (s.line, s.column)) . snd <$> stringLexer "" (advance '1')
+-- Right (0,1)
 --
--- >>> pos . snd <$> stringLexer "" (advance "123\n345")
--- Right (1,3)
---
--- >>> pos . snd <$> stringLexer "" (advance "123\n345\n")
--- Right (2,0)
-advance :: Monad m => String -> Lexer m ()
-advance = mapM_ advanceC
+-- >>> (\s -> (s.line, s.column)) . snd <$> stringLexer "" (advance '\n')
+-- Right (1,0)
+advance :: Monad m => Char -> Lexer m ()
+advance = \case
+  '\n' -> incLine
+  _    -> incCol
 {-# INLINE advance #-}
 
 -- | The next char is the good case, the bad case is the error
@@ -232,10 +206,8 @@ next good bad = do
   c <- lift st.produce
   case c of
     Nothing -> bad
-    Just c' -> advanceC c' $> good c'
+    Just c' -> advance c' $> good c'
 
--- >>> input . snd <$> stringLexer "    foo" dropWhitespace
--- Right "foo"
 dropWhitespace :: Monad m => Lexer m ()
 dropWhitespace = dropWhileL isSpace
 {-# INLINE dropWhitespace #-}
@@ -275,23 +247,22 @@ dropTakeHelper = \case
     }
     in loop []
 
--- >>> Data.Bifunctor.second input <$> stringLexer "\t\v \nbar" (dropWhileL isSpace)
--- Right ((),"bar")
+-- >>> snd <$> stringLexer "\t\v \nbar" (dropWhileL isSpace)
 --
--- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (dropWhileL (not . isSpace))
+-- >>> snd <$> stringLexer "foo\nbar" (dropWhileL (not . isSpace))
 -- Right ((),"\nbar")
 dropWhileL :: Monad m => (Char -> Bool) -> Lexer m ()
 dropWhileL predicate = void (dropTakeHelper (Right predicate))
 
--- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (dropL 3)
+-- >>> snd <$> stringLexer "foo\nbar" (dropL 3)
 -- Right ((),"\nbar")
 dropL :: Monad m => Int -> Lexer m ()
 dropL = void . dropTakeHelper . Left
 
--- >>> Data.Bifunctor.second input <$> stringLexer "foo\nbar" (takeWhileL (not . isSpace))
+-- >>> snd <$> stringLexer "foo\nbar" (takeWhileL (not . isSpace))
 -- Right ("foo","\nbar")
 --
--- >>> Data.Bifunctor.second input <$> stringLexer "\t\v \nbar" (takeWhileL isSpace)
+-- >>> snd <$> stringLexer "\t\v \nbar" (takeWhileL isSpace)
 -- Right ("\t\v \n","bar")
 takeWhileL :: Monad m => (Char -> Bool) -> Lexer m String
 takeWhileL predicate = dropTakeHelper (Right predicate)
@@ -348,32 +319,42 @@ nextToken = takeWhileL (not . isSpace)
 --
 -- >>> lexer "#foo"
 -- Right [FKeywordT "foo"]
-lexer :: Monad m
-      => Produce m
-      -> Peek m
-      -> m LexingResult
-lexer produce peek = fmap (reverse . tokens . snd) <$> runLexer produce peek lexer'
+lexer :: CharProducer m => m LexingResult
+lexer = fmap ((, Nothing) . reverse . tokens . snd) <$> runLexer lexer'
 {-# INLINE lexer #-}
 
 lexerS :: String -> LexingResult
-lexerS string = reverse . tokens . snd <$> stringLexer string lexer'
+lexerS string = do
+  (rest, st) <- stringLexer string (lexer' >> leftover)
+  pure (reverse . tokens $ st, Just rest)
 {-# INLINE lexerS #-}
 
+-- | reads all remainig input
+leftover :: Lexer MString String
+leftover = unfoldM maybeNextChar
+  where
+    unfoldM f = f >>= \case
+      Nothing -> pure []
+      Just c  -> (c:) <$> unfoldM f
+
 lexerIO :: Handle -> IO LexingResult
-lexerIO h = fmap (reverse . tokens . snd) <$> handleLexer h lexer'
+lexerIO h = fmap ((, Nothing) . reverse . tokens . snd) <$> handleLexer h lexer'
 {-# INLINE lexerIO #-}
 
+-- | The main lexing function
 lexer' :: Monad m => Lexer m ()
 lexer' = do
   dropWhitespace
   may_hd <- peekNextChar
   case may_hd of
     Nothing -> pure ()
-    Just ';' -> dropL 1 >>
+    Just c
+      | c == ';' || c == ':' -> do
+      dropL 1
       either
         fail -- on error (should not happen)
         (write . FWordT) -- on success
-        (word ";") -- trying to construct the word
+        (word [c]) -- trying to construct the word
     Just '#' -> do
       dropL 1
       a <- peekNextChar
@@ -401,18 +382,18 @@ lexer' = do
 -- | Construct a word token. Fails the Lexer m  if the word is malformed.
 -- Does not consume the word. Thus the proper way to use this is:
 --
--- >>> pos . snd <$> stringLexer "foo" (nextToken >>= mkWord)
+-- >>> (\s -> (s.line, s.column)) . snd <$> stringLexer "foo" (nextToken >>= mkWord)
 -- Right (0,3)
 --
--- Compare this with:
+-- Compare this with (not that 'leftover' causes the lexer to advance to the end of the input 
 --
--- >>> (\s -> (s.input, s.line, s.column)) . snd <$> stringLexer "foo" (mkWord "foo")
--- Right ("foo",0,0)
+-- >>> (\(rest,st) -> (rest, st.line, st.column)) <$> stringLexer "foo" (mkWord "foo" >> leftover)
+-- Right ("foo",0,3)
 --
 -- >>> fst <$> stringLexer "" (mkWord "foo")
 -- Right (FWordT :foo)
 --
--- >>> stringLexer "" (mkWord "123")
+-- >>> fst <$> stringLexer "" (mkWord "123")
 -- Left (LexingError {_type = GeneralError {message = "lexer: word: cannot start with a number or hypthen"}, row = 0, col = 0})
 mkWord :: Monad m => String -> Lexer m Token
 mkWord w = case word w of
@@ -457,27 +438,27 @@ isDouble' c = c == '.' || c == 'e'
 -- >>> fst <$> stringLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" lexList
 -- Right (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]])
 --
--- >>> input . snd <$> stringLexer "{ 1 2 3 } 234" lexList
+-- >>> fst <$> stringLexer "{ 1 2 3 } 234" (lexList >> leftover)
 -- Right " 234"
 lexList :: Monad m => Lexer m Token
 lexList = do
   lst <- takeList
-  let foo = withString lst $ lexer produceChar peekChar
+  let foo = withString lst lexer
   case foo of
-    Right liste -> pure $ FListT liste
-    Left err    -> failErr err
+    Right (liste, _) -> pure $ FListT liste
+    Left err         -> failErr err
 
 -- |
--- >>> evalLexer "{}" takeList
+-- >>> fst <$> stringLexer "{}" takeList
 -- Right ""
 --
--- >>> evalLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" takeList
+-- >>> fst <$> stringLexer "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}" takeList
 -- Right "\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}"
 --
--- >>> Data.Bifunctor.second input <$> stringLexer "{ 1 2\n3 } 234" takeList
--- Right (" 1 2\n3 "," 234")
+-- >>> fst <$> stringLexer "{ 1 2\n3 } 234" (takeList >> leftover)
+-- Right " 234"
 --
--- >>> evalLexer "{ 1 2\n3 234" takeList
+-- >>> fst <$> stringLexer "{ 1 2\n3 234" takeList
 -- Left (LexingError {_type = UnterminatedList, row = 1, col = 5})
 takeList :: Monad m => Lexer m String
 takeList = do
@@ -510,7 +491,7 @@ takeList = do
 -- >>> fst <$> stringLexer "\"foo\"bar" lexString
 -- Right (FTextT "foo")
 --
--- >>> (input . snd) <$> stringLexer "\"foo\"bar" lexString
+-- >>> fst <$> stringLexer "\"foo\"bar" (lexString >> leftover)
 -- Right "bar"
 --
 -- >>> fst <$> stringLexer "\"foo\\\"bar\"" lexString

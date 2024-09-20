@@ -17,8 +17,8 @@ If 'peekChar' returns 'Nothing' then the 'Handle' is empty.
 'produceChar' will return the head of the buffer if it is not empty.
 or query the 'Handle' for more data.
 }}}-}
-module IOBuffer
-  ( IOBuffer
+module IOPeekBuffer
+  ( IOPeekBuffer
   , withBuffer
   , CharProducer(..)
   ) where
@@ -28,30 +28,29 @@ import           Control.Exception (SomeException)
 import qualified Control.Exception as Ex
 import           Data.Functor      (($>))
 import           GHC.IO.Handle     (Handle, hGetChar)
-import           Save              (headS)
 import qualified State
 
-newtype IOBuffer a
-  = IOBuffer { runBuffer :: State.State Buffer IO a }
+newtype IOPeekBuffer a
+  = IOPeekBuffer { runBuffer :: State.State Buffer IO a }
   deriving newtype (Applicative, Functor, Monad)
 
 data Buffer
   = Buffer
-      { buffer :: String
+      { buffer :: Maybe Char
       , handle :: Handle
       }
 
-withBuffer :: Handle -> IOBuffer a -> IO a
-withBuffer h buf = State.evalState (runBuffer buf) (Buffer "" h)
+withBuffer :: Handle -> IOPeekBuffer a -> IO a
+withBuffer h buf = State.evalState (runBuffer buf) (Buffer Nothing h)
 
 getHead :: State.State Buffer IO (Maybe Char)
-getHead = headS . buffer <$> State.get
+getHead = buffer <$> State.get
 
-removeHead :: IOBuffer ()
-removeHead = IOBuffer $ State.modify \buf -> buf { buffer = tail buf.buffer }
+removeHead :: IOPeekBuffer ()
+removeHead = IOPeekBuffer $ State.modify \buf -> buf { buffer = Nothing }
 
 put :: Char -> State.State Buffer IO ()
-put c = State.modify \buf -> buf { buffer = c : buf.buffer }
+put c = State.modify \buf -> buf { buffer = Just c }
 
 liftIO :: IO a -> State.State Buffer IO a
 liftIO = State.liftIO
@@ -59,16 +58,16 @@ liftIO = State.liftIO
 catch :: IO a -> (SomeException -> IO a) -> IO a
 catch = Ex.catch
 
-instance CharProducer IOBuffer where
-  produceChar :: IOBuffer (Maybe Char)
+instance CharProducer IOPeekBuffer where
+  produceChar :: IOPeekBuffer (Maybe Char)
   produceChar = do
     hd <- peekChar
     case hd of
       Nothing -> pure Nothing;
       Just c  -> removeHead $> Just c
 
-  peekChar :: IOBuffer (Maybe Char)
-  peekChar = IOBuffer do
+  peekChar :: IOPeekBuffer (Maybe Char)
+  peekChar = IOPeekBuffer do
     may_head <- getHead
     st <- State.get
     case may_head of
