@@ -27,11 +27,12 @@ import           Control.Exception (SomeException)
 import qualified Control.Exception as Ex
 import           Data.Functor      (($>))
 import           GHC.IO.Handle     (Handle, hGetChar)
+import           HasState          (HasState (get, modify))
 import qualified State
 
 newtype IOPeekBuffer a
   = IOPeekBuffer { runBuffer :: State.State Buffer IO a }
-  deriving newtype (Applicative, Functor, Monad)
+  deriving newtype (Applicative, Functor, HasState Buffer, Monad)
 
 data Buffer
   = Buffer
@@ -42,17 +43,17 @@ data Buffer
 withBuffer :: Handle -> IOPeekBuffer a -> IO a
 withBuffer h buf = State.evalState (runBuffer buf) (Buffer Nothing h)
 
-getHead :: State.State Buffer IO (Maybe Char)
-getHead = buffer <$> State.get
+getHead :: IOPeekBuffer (Maybe Char)
+getHead = buffer <$> get
 
 removeHead :: IOPeekBuffer ()
-removeHead = IOPeekBuffer $ State.modify \buf -> buf { buffer = Nothing }
+removeHead = IOPeekBuffer $ modify \buf -> buf { buffer = Nothing }
 
-put :: Char -> State.State Buffer IO ()
-put c = State.modify \buf -> buf { buffer = Just c }
+put :: Char -> IOPeekBuffer ()
+put c = modify \buf -> buf { buffer = Just c }
 
-liftIO :: IO a -> State.State Buffer IO a
-liftIO = State.liftIO
+liftIO :: IO a -> IOPeekBuffer a
+liftIO = IOPeekBuffer . State.liftIO
 
 catch :: IO a -> (SomeException -> IO a) -> IO a
 catch = Ex.catch
@@ -66,9 +67,9 @@ instance CharProducer IOPeekBuffer where
       Just c  -> removeHead $> Just c
 
   peekChar :: IOPeekBuffer (Maybe Char)
-  peekChar = IOPeekBuffer do
+  peekChar = do
     may_head <- getHead
-    st <- State.get
+    st <- get @Buffer
     case may_head of
       Nothing -> do
         c <- liftIO $ hGetChar st.handle `catch` const (pure '\0')

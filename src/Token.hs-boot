@@ -2,8 +2,11 @@ module Token (Token(..), FWord, word) where
 
 word :: String -> Either String FWord
 
-newtype FWord
-  = FWord String
+data FWord
+  = FWord  
+      { str :: String
+      , flags :: Int
+      }
 
 data Token where
   FBoolT :: !Bool -> Token -- ^ A boolean

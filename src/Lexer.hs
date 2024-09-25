@@ -26,6 +26,8 @@ import                qualified Result
 import                          Result                (Result)
 import                qualified State
 import                          System.IO             (Handle)
+import                          MonadLift             (MonadLift(..))
+import                          HasState                 (HasState(..))
 -- this is needed so we dont have a cyclic dependency
 -- (for the IsString instance for [Token] (see src/Token.hs))
 import {-# SOURCE #-}           Token                 (Token(..), word)
@@ -47,13 +49,13 @@ withString s mstr = runIdentity $ State.evalState (withString' mstr) s
 
 instance CharProducer MString where
   produceChar = MString $ do
-    s <- State.get
+    s <- get
     case s of
       []     -> pure Nothing
-      (x:xs) -> State.put xs $> Just x
+      (x:xs) -> put xs $> Just x
 
   peekChar = MString $ do
-    s <- State.get
+    s <- get
     case s of
       []    -> pure Nothing
       (x:_) -> pure $ Just x
@@ -104,10 +106,19 @@ data LexingErrorType
 
 newtype Lexer m a
   = Lexer { runLexer' :: State.State (LexerState m) (Result LexingError m) a }
-  deriving newtype (Applicative, Functor, Monad)
+  deriving newtype (Applicative, Functor, HasState (LexerState m), Monad)
+
 
 instance Monad m => MonadFail (Lexer m) where
   fail s = failWith (GeneralError s)
+  {-# INLINE fail #-}
+
+instance MonadLift Lexer where
+  lift :: Monad m
+       => m a
+       -> Lexer m a
+  lift = Lexer . MonadLift.lift . MonadLift.lift
+  {-# INLINE lift #-}
 
 -- | The result of the lexer.
 -- It is either a 'LexingError' if some error was encounterd during the lexing phase
@@ -138,23 +149,8 @@ handleLexer :: Handle
 handleLexer h = withBuffer h . runLexer
 {-# INLINE handleLexer #-}
 
-lift :: Monad m
-     => m a
-     -> Lexer m a
-lift = Lexer . State.lift . Result.lift
-{-# INLINE lift #-}
-
--- | returns the current state of the lexer
-get :: Monad m => Lexer m (LexerState m)
-get = Lexer State.get
-{-# INLINE get #-}
-
-put :: Monad m => LexerState m -> Lexer m ()
-put = Lexer . State.put
-{-# INLINE put #-}
-
 failErr :: Monad m => LexingError -> Lexer m a
-failErr = Lexer . State.lift . Result.fail
+failErr = Lexer . MonadLift.lift . Result.fail
 {-# INLINE failErr #-}
 
 failWith :: Monad m => LexingErrorType -> Lexer m a

@@ -1,16 +1,18 @@
 module Main where
 
-import Repl (repl)
+import Repl.Repl (repl)
+import Repl.Types
+import System.IO (IOMode(ReadMode), withFile)
 
 import System.Environment (getArgs)
-import Dictionary (ReadMode(..))
 
 main :: IO ()
 main = do 
   args <- getArgs
   if (length args == 1) then do
     let path = head args
-    repl (File path)
+    withFile path ReadMode
+      ( \file -> repl (File file) )
   else 
     repl Repl
 

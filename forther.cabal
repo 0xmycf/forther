@@ -58,17 +58,27 @@ library
   import:           ghc-options-lib
   import:           extensions
   exposed-modules: 
-    Stack
-    Save
+    -- data structures
     BinTree
-    Dictionary
-    Token
-    Lexer
-    Repl
-    State
+    Stack
+    -- util
+    Save
+    -- monads
     Result
+    State
     IOPeekBuffer
+    MonadLift
+    HasState
+    -- forther
+    -- Dictionary
+    Token
+    -- lexing and parsing
+    Lexer
     CharProducer
+    -- repl
+    Repl.Types
+    Repl.Repl
+    Repl.Machine
   build-depends:    
       base ^>=4.18.2.0
     , deepseq
