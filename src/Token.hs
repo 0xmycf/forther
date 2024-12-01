@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternSynonyms, ViewPatterns #-}
 {-| Haddock {{{
 Module      : Token
 Description : Tokens and Lexing
@@ -12,208 +11,93 @@ module Token
   ( Token(..)
   -- * Words in the Forther langauge
   , FWord
-  , pattern Exec
-  , pattern Colon
   , word
-  , mkWord
-  -- * Lexing
-  , lexer
+  , withFlags
+  , withFlag
+  -- * Flags or Keywords
+  , Flag(..)
+  , isImmediate
+  -- * Utility Functions
+  , fromToken
+  , toKeyword
+  , isKeyword
+  , isWord
+  , isSemiColon
+  , isImmediateT
+  , setFlags
+  -- * Pretty printing
+  , prettyPrint
   ) where
+
 import           Control.DeepSeq (NFData)
-import           Data.Bifunctor  (first)
-import           Data.Char       (isSpace)
-import           Save            (headS)
+import           Data.Bits       (Bits(setBit))
+import           Data.String     (IsString(..))
+import           Foreign         (testBit)
+import           GHC.Generics    (Generic)
+import           Lexer           (lexerS)
 
 -- | Use the smart constructor `word` instead
 -- An FWord should never be longer than 10 chars
--- and not contain numbers
+-- and not contain numbers.
 --
--- >>> show $ FWord "exec"
+-- Words ordered and compared using only their string representation
+--
+-- >>> show $ FWord "exec" 0
 -- ":exec"
-newtype FWord
-  = FWord String
-  deriving newtype (Eq, NFData, Ord)
+data FWord
+  = FWord
+      { str   :: String
+      , flags :: Int
+      }
+  deriving (Generic, NFData)
+
+instance Eq FWord where
+  (==) (FWord str1 _) (FWord str2 _) = str1 == str2
+
+instance Ord FWord where
+  compare (FWord str1 _) (FWord str2 _) = compare str1 str2
 
 instance Show FWord where
-  show (FWord str) = ':' : str
+  show (FWord str _) = ':' : str
 
-pattern Exec :: FWord
-pattern Exec <- FWord "exec"
-
-pattern Colon :: FWord
-pattern Colon <- FWord ":"
-
--- | recieves the full line
---
--- >>> lexer "1 2 3"
--- [FNumberT 1,FNumberT 2,FNumberT 3]
---
--- >>> lexer "1 2 3 \"b\\ar\""
--- [FNumberT 1,FNumberT 2,FNumberT 3,FTextT "b\\ar"]
---
--- >>> lexer "123 2132 30103 2322"
--- [FNumberT 123,FNumberT 2132,FNumberT 30103,FNumberT 2322]
---
--- >>> lexer "1 2 print"
--- [FNumberT 1,FNumberT 2,FWordT :print]
---
--- >>> lexer "-2"
--- [FNumberT (-2)]
---
--- >>> lexer "{-2 {\"some string - 2\"}}"
--- [FListT [FNumberT (-2),FListT [FTextT "some string - 2"]]]
---
--- >>> lexer "{ I } 2"
--- [FListT [FWordT :I],FNumberT 2]
---
--- >>> lexer "{ } 2"
--- [FListT [],FNumberT 2]
---
--- >>> lexer "( { } )"
--- []
---
--- >>> lexer "1 2 ( )"
--- [FNumberT 1,FNumberT 2]
--- 
--- >>> lexer "1\n{\n 1 2 3 \n}\n\"some word\""
--- [FNumberT 1,FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "some word"]
-lexer :: String -> [Token]
-lexer line =
-  let hd = dropWhile isSpace line
-  in case headS hd of
-    Nothing -> []
-    Just ';' -> []
-    Just '#' -> case headS (drop 1 hd) of
-      Nothing -> []
-      Just '!' -> lexer $ drop 1 $ dropWhile (/= '\n') hd
-      _ -> lexer $ drop 1 hd  -- TODO this is where we have to add keywords etc later on
-    Just '(' -> -- comments
-      let rest = dropWhile (/= ')') hd in
-      lexer $ drop 1 rest
-    Just (isInt -> True) ->
-      let (num, rest) = span isDouble hd
-      in if any isDouble' num
-          then FDoubleT (read num) : lexer rest
-          else FNumberT (read num) : lexer rest
-    Just '"' ->
-      let (token, rest) = lexString hd
-      in token : lexer rest
-    Just '{' ->
-      let (token, rest) = lexList hd
-      in token : lexer rest
-    Just 't' -> let (w, rest) = span (/= ' ') hd
-                in if w == "true" then FBoolT True : lexer rest
-                else mkWord w : lexer rest
-    Just 'f' -> let (w,r) = span (/= ' ') hd
-                in if w == "false" then FBoolT False : lexer r
-                else mkWord w : lexer r
-    Just _ ->
-      let (w, rest) = span (/= ' ') hd
-      in mkWord w : lexer rest
-
--- | Predicate for matching an integer
--- >>> all isInt ([ '0'..'9'] ++ ['-'])
--- True
-isInt :: Char -> Bool
-isInt c = c `elem` ['0'..'9'] || c == '-'
-
--- | Predicate for matching a double
--- >>> all isDouble ([ '0'..'9'] ++ ['-', '.', 'e'])
--- True
-isDouble :: Char -> Bool
-isDouble c = isInt c || c == '.' || c == 'e'
-
--- | Predicate for matching a double without checking isInt
--- >>> isDouble' '.'
--- True
---
--- >>> isDouble' 'e'
--- True
-isDouble' :: Char -> Bool
-isDouble' c = c == '.' || c == 'e'
-
--- | Construct a word token
--- >>> mkWord "foo"
--- FWordT :foo
---
--- >> mkWord "123"
--- lexer: word: cannot start with a number or hypthen
-mkWord :: String -> Token
-mkWord w = case word w of
-  Right w'    -> FWordT w'
-  Left reason -> error $ "lexer: " <> reason
-
--- | Token ~ FListT
---
--- >>> lexList "{}"
--- (FListT [],"")
---
--- >>> lexList "{1}"
--- (FListT [FNumberT 1],"")
---
--- >>> lexList "{123 31}"
--- (FListT [FNumberT 123,FNumberT 31],"")
---
--- >>> lexList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
--- (FListT [FTextT "sdlfjsdf",FListT [FNumberT 1,FNumberT 2,FNumberT 3],FTextT "sdfjsdf",FListT [FListT [FNumberT 1],FListT [FNumberT 2,FNumberT 3,FNumberT 4]]],"")
---
--- >>> lexList "{ 1 2 3 } 234"
--- (FListT [FNumberT 1,FNumberT 2,FNumberT 3]," 234")
-lexList :: String -> (Token, String)
-lexList ls =
-  let (lst, rest) = takeList ls
-  in (FListT (lexer lst), rest)
-
--- |
--- >>> takeList "{\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}}"
--- ("\"sdlfjsdf\" {1 2 3} \"sdfjsdf\" {{1} { 2 3 4 }}","")
---
--- >>> takeList "{ 1 2\n3 } 234"
--- (" 1 2\n3 "," 234")
-takeList :: String -> (String, String)
-takeList = first reverse . go [] (0::Int)
-  where
-    go :: String -> Int -> String -> (String, String)
-    go acc n (x:xs)
-      | x == '{' && 0 == n = go acc (n + 1) xs
-      | x == '{'           = go (x:acc) (n + 1) xs
-      | x == '}' && 1 == n = (acc, xs)
-      | x == '}'           = go (x:acc) (n - 1) xs
-      | otherwise          = go (x:acc) n xs
-    go a n [] = error $ "takeList: unterminated list: " <> show (reverse a) <> " '{'-count:" <> show n
-
--- | Token ~ FTextT
---
--- \" and " are the same in case of chars
--- >>> '\"' == '"'
--- True
---
--- >>> lexString "foo\""
--- (FTextT "foo","")
---
--- >>> lexString "\"foo\""
--- (FTextT "foo","")
---
--- >>> lexString "\"foo\"bar"
--- (FTextT "foo","bar")
---
--- >>> lexString "\"foo\\\"bar\""
--- (FTextT "foo\\\"bar","")
-lexString :: String -> (Token, String)
-lexString str = go [] (if head str == '"' then tail str else str)
-  where
-    go _ []       = error "lexString: unterminated string"
-    go acc (x:xs)
-      | x == '"'  = (FTextT (reverse acc), xs)
-      | x == '\\' = go (head xs : x : acc) (tail xs)
-      | otherwise = go (x:acc) xs
-
--- | Creates a word from a String
+-- | Safely creates a word from a String
 word :: String -> Either String FWord
-word str
+word str = withFlags str []
+{-# INLINE word #-}
+
+withFlags :: String -> [Flag] -> Either String FWord
+withFlags str flags
   | length str > 10 = Left "word: too long"
   | head str `elem` '-' : ['0'..'9'] = Left "word: cannot start with a number or hypthen"
-  | otherwise = Right (FWord str)
+  | otherwise = Right (FWord str flgs)
+  where flgs = foldr (setBit . fromEnum) 0 flags
+{-# INLINABLE withFlags #-}
+
+withFlag :: FWord -> Flag -> FWord
+withFlag (FWord str flags) flag = FWord str (setBit flags (fromEnum flag))
+{-# INLINE withFlag #-}
+
+setFlags :: FWord -> [Flag] -> FWord
+setFlags = foldr (flip withFlag)
+{-# INLINE setFlags #-}
+
+fromToken :: Token -> Maybe FWord
+fromToken = \case
+  FWordT w -> Just w
+  _        -> Nothing
+{-# INLINE fromToken #-}
+
+data Flag
+  = Immediate
+  deriving (Enum, Show)
+
+-- |
+-- >>> import Data.Either (fromRight)
+-- >>> isImmediate $ fromRight undefined $ withFlags "foo" [Immediate]
+-- True
+isImmediate :: FWord -> Bool
+isImmediate (FWord _ flags) = testBit flags (fromEnum Immediate)
+{-# INLINE isImmediate #-}
 
 data Token where
   FBoolT :: !Bool -> Token -- ^ A boolean
@@ -221,6 +105,72 @@ data Token where
   FDoubleT :: !Double -> Token -- ^ A number (pos or negative)
   FWordT :: !FWord -> Token -- ^ A word in the forther language
   FTextT :: !String -> Token -- ^ A string
-  FListT :: ![Token] -> Token
-  deriving (Show)
+  FListT :: ![Token] -> Token -- ^ A stack
+  FKeywordT :: !String -> Token -- ^ A keyword. All keywords start with #, which is not included in the String
+  deriving (Generic, NFData, Show)
 
+{- CURRENT DEFINED KEYWORDS
+
+  Flag   Keyword      Description
+  1      #immediate   A word that is executed immediately instead of being compoilied into a word definition
+
+-}
+
+toKeyword :: String -> Maybe Flag
+toKeyword = \case
+  "immediate" -> Just Immediate
+  _           -> Nothing
+{-# INLINE toKeyword #-}
+
+isKeyword :: Token -> Bool
+isKeyword = \case
+  FKeywordT _ -> True
+  _           -> False
+{-# INLINE isKeyword #-}
+
+isWord :: Token -> Bool
+isWord = \case
+  FWordT _ -> True
+  _        -> False
+{-# INLINE isWord #-}
+
+isSemiColon :: Token -> Bool
+isSemiColon = \case
+  FWordT (FWord ";" _) -> True
+  _                    -> False
+{-# INLINE isSemiColon #-}
+
+isImmediateT :: Token -> Bool
+isImmediateT = \case
+  (FWordT w) -> isImmediate w
+  _          -> False
+{-# INLINE isImmediateT #-}
+
+instance {-# OVERLAPPING #-} IsString [Token] where
+  fromString :: String -> [Token]
+  fromString s = case lexerS s of
+    Right (tokens, _) -> tokens
+    Left _            -> []
+
+-- |
+-- >>> str =  "1 2.2 one {1 {#bar 4.3} 3} #foo"
+-- >>> foo :: [Token] = str
+-- >>> prettyPrint foo == str
+-- True
+prettyPrint :: [Token] -> String
+prettyPrint = unwords . map prettyPrint'
+  where
+    prettyPrint' :: Token -> String
+    prettyPrint' = \case
+      FBoolT b -> show b
+      FNumberT n -> show n
+      FDoubleT d -> show d
+      FWordT w -> tail $ show w
+      FTextT t -> show t
+      FListT ts -> '{' : prettyPrint ts ++ "}"
+      FKeywordT k -> '#' : k
+
+{- TODO
+    using keywords <> flags is not a good thing, since we later want to use keywords
+    for stuff like classes
+-}

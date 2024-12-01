@@ -9,12 +9,13 @@ module Result
   , orFailWith
   , liftEither
   , liftIO
-  , lift
   ) where
 
 import           Control.Monad.Fail     (fail)
 import           Control.Monad.IO.Class (MonadIO(liftIO))
+import           MonadLift              (MonadLift(..))
 import           Prelude                hiding (fail)
+import qualified Control.Monad.Fail as Fail
 
 newtype Result e m a
   = Result { runResult :: m (Either e a) }
@@ -32,10 +33,10 @@ fail e = Result $ pure (Left e)
 ok :: Monad m => a -> Result e m a
 ok a = Result $ pure (Right a)
 
-orFailWith :: Monad m => Maybe a -> e -> Result e m a
+orFailWith :: MonadFail f => Maybe a -> String -> f a
 orFailWith e reason = case e of
   Just a  -> pure a
-  Nothing -> Result.fail reason
+  Nothing -> Fail.fail reason
 
 liftEither :: Monad m => Either e a -> Result e m a
 liftEither = Result . pure
@@ -73,3 +74,5 @@ instance Monad m => MonadFail (Result String m) where
 lift :: Monad m => m a -> Result e m a
 lift mon = Result $ Right <$> mon
 
+instance MonadLift (Result e) where
+  lift = Result.lift

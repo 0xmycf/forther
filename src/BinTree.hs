@@ -1,17 +1,22 @@
 module BinTree
   ( BinTree
+  -- * Construction
   , empty
   , singleton
   , fromList
+  -- * To List Conversion
   , inOrder
   , preOrder
   , keys
+  -- * Modification
   , insert
   , delete
   , update
+  -- * Lookups
   , lookup
+  , lookupKey
   ) where
-import Prelude hiding (lookup)
+import           Prelude hiding (lookup)
 
 data BinTree k v
   = Empty
@@ -50,7 +55,7 @@ preOrder (Node left k v right) =
 -- >>> keys (insert (3::Int) ("three"::String) $ insert 2 "two" $ singleton 1 "one")
 -- [1,2,3]
 keys :: BinTree k v -> [k]
-keys Empty = []
+keys Empty          = []
 keys (Node l k _ r) = keys l ++ [k] ++ keys r
 
 -- | Creates a tree from a list of key value pairs
@@ -92,6 +97,22 @@ lookup (Node left ky v right) k
       EQ -> Just v
       LT -> lookup left k
       GT -> lookup right k
+
+-- | Looks up a key in the tree and returns the key that was in the map
+-- this is useful if the key as a Ord instance, which
+-- does not compare all values of the key type.
+--
+-- We use this for the repl, where we want to look up a word.
+-- Words are compared using their string representation,
+-- but we need to check some of their flags, which we cannot do,
+-- unless we lookup the word in the dictionary.
+lookupKey :: Ord k => BinTree k v -> k -> Maybe k
+lookupKey Empty _ = Nothing
+lookupKey (Node left ky _ right) k
+  = case compare k ky of
+      EQ -> Just ky
+      LT -> lookupKey left k
+      GT -> lookupKey right k
 
 -- | Deletes a key from the tree
 -- >>> delete (1::Int) (insert 1 ("one"::String) empty)
