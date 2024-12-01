@@ -93,12 +93,11 @@ See `./examples/*.forther` for examples.
   - ✅ For
   - ✅ Basic stack operations
   - ❌ While (to have conditional looping)
-- 🚧 `ErrorCall` free (better error handling)
-  - Error handling is done in multiple ways (through exceptions and the Result type).
-    It would be nicer, to handle all internal (meaning all errors that I have control over)
-    in the same way. This would also lead to better error messages.
+- ✅ `ErrorCall` free (better error handling)
+  - There is still improvement for error handling (`Result`, `IO`, `State`, ...)
+  - some of the pure functions in `Stack` or `BinTree` are not total
 - ✅ reading from a file
-- 🚧 Compile mode 
+- ✅ Compile mode 
 - ❌ Dumping the current word list to a file
 - ❌ JVM backend
 - (❌) Maybe a cuomst vm?
