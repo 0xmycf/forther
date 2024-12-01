@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternSynonyms #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Avoid lambda" #-}
 {-# OPTIONS_GHC -Wno-unused-imports #-}
@@ -20,22 +19,24 @@ import           Stack                  (Stack, StackElement(..), empty,
                                          prettyPrint, push, toStackElement)
 import           System.IO              (hFlush, hGetLine, stdout)
 import           System.IO.Error        (isEOFError)
-import           Token                  (FWord, Flag, Token(..), fromToken,
-                                         isImmediate, isImmediateT, isKeyword,
-                                         isSemiColon, isWord, pattern SemiColon,
-                                         setFlags, toKeyword, word)
+import           Token                  (FWord, Flag(Immediate), Token(..),
+                                         fromToken, isImmediate, isImmediateT,
+                                         isKeyword, isSemiColon, isWord,
+                                         prettyPrint, setFlags, toKeyword, word)
 
+import qualified BinTree                as Bt
 import           Control.DeepSeq        (deepseq, force)
 import           Control.Monad.IO.Class (liftIO)
-import           Data.Maybe             (fromJust, fromMaybe, isJust)
+import           Data.Maybe             (fromJust, fromMaybe, isJust, isNothing)
 import           Lexer                  (lexerS)
 import           Repl.Machine           (DictEntry(..),
                                          FortherCompileMode(RunMode, WordDefineMode),
-                                         Interpreter(Interpreter, dictionary, mode, readMode, stack),
+                                         Interpreter(Interpreter, defineCtx, dictionary, mode, readMode, stack),
                                          ReadMode(..), def, readModeIsFile,
-                                         setCompileMode, setRunMode)
-import           Repl.Types             (ReplState, StackOperation, runRepl,
-                                         runStackOperation, setStack)
+                                         setCompileMode, setMode, setRunMode)
+import           Repl.Types             (DefineCtx(..), ReplState,
+                                         StackOperation, ctxAdd, mkDefineCtx,
+                                         runRepl, runStackOperation, setStack)
 import qualified Result
 
 prefix :: String
@@ -52,7 +53,7 @@ repl readMode =
       `catch` (\(e::AsyncException) -> when (e == UserInterrupt) $ putStrLn "" >> putStrLn bye)
       `catch` (\(e::IOError) -> when (isEOFError e) $ putStrLn bye)
   where
-    machine = Interpreter (def eval) empty RunMode
+    machine = Interpreter (def eval) Stack.empty RunMode Nothing
     dropLineIfFile = \case
       Repl      -> pure ()
       -- technically I should check whether the first line
@@ -65,20 +66,22 @@ loop = do
   line <- promptWithInput
   readMode <- readMode <$> get
   case headS line of
-    Nothing           -> pure ()
-    Just _ -> do
+    Nothing -> pure ()
+    Just _  -> do
       oldState <- get
       case lexerS line of
-        Result.Err err -> liftIO (putStrLn $ "Lexer error: " <> show err) >> put oldState
+        Result.Err err        ->
+          liftIO (putStrLn $ "Lexer error: " <> show err) >> put oldState
         Result.Ok (tokens, _) -> do
           res <- liftIO $ try $ runRepl (runStackOperation (eval tokens)) oldState
           case res of
-            Left (SomeException e)  -> liftIO (print e)
+            Left (SomeException  e) -> liftIO (print e)
             Right (Result.Err e, _) -> liftIO (putStrLn e)
             Right (Result.Ok _, ns) ->
               put ns >>
+                -- we dont want to print anything when interpreting from a file
                 unless (readModeIsFile readMode)
-                  (getStack >>= liftIO . putStrLn . ("Stack: " <>) . prettyPrint)
+                  (getStack >>= liftIO . putStrLn . ("Stack: " <>) . Stack.prettyPrint)
   loop
 
 promptWithInput :: ReplState String
@@ -89,24 +92,14 @@ promptWithInput = do
     Result.liftIO do
       putStr prefix
       hFlush stdout
-  readInput ""
+  readInput -- ""
 
-readInput :: String -> ReplState String
-readInput buf = do
+readInput :: ReplState String
+readInput = do
   readMode <- readMode <$> get
-  line <- trim <$> Result.liftIO (case readMode of
+  trim <$> Result.liftIO (case readMode of
       Repl      -> getLine
       File file -> hGetLine file)
-  mode <- mode <$> get
-  case mode of
-    WordDefineMode -> case lastS line of
-      Just ';' -> modify setRunMode $> buf <> line
-      _        -> readInput $ buf <> line <> " "
-    RunMode -> case headS line of
-      Just ':' -> case lastS line of
-        Just ';' -> pure $ buf <> line
-        _        -> modify setCompileMode >> readInput (buf <> line <> " ")
-      _        -> pure $ buf <> line
 
 trim :: String -> String
 trim = dropWhileEnd Char.isSpace . dropWhile Char.isSpace
@@ -115,90 +108,85 @@ getStack :: ReplState (Stack StackElement)
 getStack = stack <$> get
 {-# INLINE getStack #-}
 
-data DefineCtx
-  = DefineCtx
-      { name  :: FWord
-      , flags :: [Flag]
-      , body  :: [Token]
-      }
-
-defineCtx :: Token -> StackOperation DefineCtx
-defineCtx = \case
-  FWordT name -> pure $ DefineCtx name [] []
-  _ -> fail "defineCtx: expected a word"
-{-# INLINE defineCtx #-}
+withRunMode :: HasState Interpreter m => m b -> m b
+withRunMode action = do
+  inter <- get
+  let mode = inter.mode
+  put $ setRunMode inter
+  res <- action
+  newInter <- get
+  put $ setMode mode newInter
+  pure res
 
 eval :: [Token] -> StackOperation ()
 eval = go
   where
-    -- go decides whether to define a word or to run it
-    go (tkn:xs) = do
-      mode <- mode <$> get
-      case mode of
-        WordDefineMode -> do
-          (rest, ctx) <- defineCtx tkn >>= define_ xs
-          modify $ \m ->
-            ctx.body `deepseq` m
-              { dictionary
-                = BT.insert
-                  (force $ setFlags ctx.name ctx.flags)
-                  (Literal . reverse $ ctx.body) m.dictionary
-              }
-          go rest
-        RunMode -> translate tkn >> go xs
-    go [] = pure ()
+  -- go decides whether to define a word or to run it
+  go tkns@(tkn:xs) = do
+    mode <- mode <$> get
+    case mode of
+      WordDefineMode -> do
+        may_ctx <- defineCtx <$> get
+        when (isNothing may_ctx) $
+          mkDefineCtx tkn
+        rest <- defineWord tkns
+        go rest
+      RunMode -> translate tkn >> go xs
+  go [] = pure ()
 
-    -- helper function to check whether we are sitll defining a word or running the program
-    -- define_ then calls this function instead of itself
-    defIfDefining tkns ctx = do
-      mode <- mode <$> get
-      case mode of
-        RunMode        -> pure (tkns, ctx)
-        WordDefineMode -> define_ tkns ctx
-    {-# INLINE defIfDefining #-}
+  -- helper function to check whether we are sitll defining a word or running the program
+  -- define_ then calls this function instead of itself
+  defIfDefining []   = pure []
+  defIfDefining tkns = do
+    mode <- mode <$> get
+    case mode of
+      RunMode        -> pure tkns
+      WordDefineMode -> defineWord tkns
+  {-# INLINE defIfDefining #-}
 
-    -- | handles all the different cases for defining a word
-    -- this might be:
-    -- executing an immediate word instead of adding it to the dictionary
-    -- adding a keyword (flag) to the final word
-    define_ (hd:tkns) ctx
-      | FKeywordT keyword <- hd
-        = define_ tkns (ctx { flags = maybe ctx.flags (:ctx.flags) (toKeyword keyword) })
-      | otherwise = executeIfImmediate hd >> defIfDefining tkns (ctx { body = hd : ctx.body })
-    define_ rest c = do
-      mode <- mode <$> get
-      case mode of
-        WordDefineMode -> define_ rest c -- its safe to call define_ here since, we are in WordDefineMode
-        RunMode        -> pure (rest , c)
+  -- | handles all the different cases for defining a word
+  -- this might be:
+  -- executing an immediate word instead of adding it to the dictionary
+  -- adding a keyword (flag) to the final word
+  defineWord (hd:tkns)
+    | FKeywordT _ <- hd = ctxAdd hd >> defIfDefining tkns
+    | otherwise = executeIfImmediate hd >>= \case
+        True  -> defIfDefining tkns
+        False -> ctxAdd hd >> defIfDefining tkns
+  defineWord [] = pure []
 
-    -- | if the given token is a word and it is immediate it executes the word
-    executeIfImmediate :: Token -> StackOperation ()
-    executeIfImmediate = \case
-      -- wt == wordToken
-      wt@(FWordT w) -> do
-        dict <- dictionary <$> get
-        case dict `BT.lookupKey` w of
-          Just entry | isImmediate entry -> translate wt
-          _                              -> pure ()
-      _ -> pure ()
+  -- | if the given token is a word and it is immediate it executes the word
+  executeIfImmediate :: Token -> StackOperation Bool
+  executeIfImmediate = \case
+    (FWordT w) -> do
+      dict <- dictionary <$> get
+      case dict `BT.lookupKey` w of
+        Just key | isImmediate key -> do
+          let value = dict `Bt.lookup` key
+          execute' True $ fromJust value
+          pure True
+        _                          -> pure False
+    _ -> pure False
 
-    -- | actually excuting the word if it is inside the dictionary
-    translate :: Token -> StackOperation ()
-    translate = \case
-      FWordT w -> do
-        dict <- dictionary <$> get
-        case dict `BT.lookup` w of
-          Just entry -> execute entry
-          Nothing    -> fail $ "eval: word not found in dictionary: " <> show w
-      FKeywordT _ -> fail "Keywords are not yet implemented"
-      tkn -> modifyStack (toStackElement tkn)
+  -- | actually excuting the word if it is inside the dictionary
+  translate :: Token -> StackOperation ()
+  translate = \case
+    FWordT w -> do
+      dict <- dictionary <$> get
+      case dict `BT.lookup` w of
+        Just entry -> execute' (isImmediate w) entry
+        Nothing    -> fail $ "eval: word not found in dictionary: " <> show w
+    FKeywordT _ -> fail "There are currently no Keywords which can be translated"
+    tkn -> modifyStack (toStackElement tkn)
 
 modifyStack :: StackElement -> StackOperation ()
 modifyStack = modify . setStack . push
 {-# INLINE modifyStack #-}
 
-execute :: DictEntry -> StackOperation ()
-execute (BuiltIn f)    = f
-execute (Literal tkns) = eval tkns
-{-# INLINE execute #-}
-
+execute' :: Bool -> DictEntry -> StackOperation ()
+execute' _ (BuiltIn f)        = f
+execute' True (Literal tkns)  = withRunMode $ eval tkns
+-- withRunMode makes no difference here,
+-- since we are already in RunMode already (hopefully)
+execute' False (Literal tkns) = eval tkns
+{-# INLINE execute' #-}

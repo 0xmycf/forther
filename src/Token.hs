@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternSynonyms #-}
 {-| Haddock {{{
 Module      : Token
 Description : Tokens and Lexing
@@ -18,10 +17,6 @@ module Token
   -- * Flags or Keywords
   , Flag(..)
   , isImmediate
-  -- * Special Forther words
-  , pattern Exec
-  , pattern Colon
-  , pattern SemiColon
   -- * Utility Functions
   , fromToken
   , toKeyword
@@ -65,21 +60,6 @@ instance Ord FWord where
 instance Show FWord where
   show (FWord str _) = ':' : str
 
--- | the "exec" word
--- It executes the top of the stack (if its a stack / list)
-pattern Exec :: FWord
-pattern Exec <- FWord "exec" _
-
--- | the ":" word
--- It is used to define a new word
-pattern Colon :: FWord
-pattern Colon <- FWord ":" _
-
--- | the ";" word
--- Its used to end a word definition
-pattern SemiColon :: FWord
-pattern SemiColon <- FWord ";" _
-
 -- | Safely creates a word from a String
 word :: String -> Either String FWord
 word str = withFlags str []
@@ -109,7 +89,7 @@ fromToken = \case
 
 data Flag
   = Immediate
-  deriving (Enum)
+  deriving (Enum, Show)
 
 -- |
 -- >>> import Data.Either (fromRight)
@@ -156,8 +136,8 @@ isWord = \case
 
 isSemiColon :: Token -> Bool
 isSemiColon = \case
-  FWordT SemiColon -> True
-  _                -> False
+  FWordT (FWord ";" _) -> True
+  _                    -> False
 {-# INLINE isSemiColon #-}
 
 isImmediateT :: Token -> Bool

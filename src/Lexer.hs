@@ -316,6 +316,9 @@ nextToken = takeWhileL (not . isSpace)
 --
 -- >>> fst <$> lexerS "#foo"
 -- Right [FKeywordT "foo"]
+--
+-- >>> fst <$> lexerS ": bar 1 2 ; bar"
+-- Right [FWordT ::,FWordT :bar,FNumberT 1,FNumberT 2,FWordT :;,FWordT :bar]
 lexerS :: String -> LexingResult
 lexerS string = do
   (rest, st) <- stringLexer string (lexer' >> leftover)

@@ -1,0 +1,14 @@
+
+
+: foo #immediate 1 ;
+
+"this is the current stack: " print . show
+
+: bar foo "This is run when bar is called" println . ;
+
+"this is the current stack: " print . show
+
+bar
+
+"this is the current stack: " print . show
+

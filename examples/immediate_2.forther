@@ -1,0 +1,23 @@
+
+: blue "Blue is my favorite color!" println . ;
+
+"Before we define foo (#immediate): " print . show
+
+: foo #immediate 1 blue ;
+
+"After we defined foo (#immediate): " print . show
+
+"Before we define bar. " print . show
+
+: bar foo "This is run when bar is called" println . ;
+
+"After we defined bar: " print . show
+
+"Before we call bar: " print . show
+
+bar
+
+"After we call bar: " print . show
+
+"Before we exit the script: " print . show
+

@@ -11,13 +11,15 @@ module Repl.Machine
   , FortherCompileMode(..)
   , setCompileMode
   , setRunMode
+  , setMode
   , ReadMode(..)
   , readModeIsFile
 ) where
 
 import           BinTree                (insert, keys)
 import qualified BinTree
-import           Control.DeepSeq        (force)
+import qualified BinTree                as BT
+import           Control.DeepSeq        (deepseq, force)
 import           Control.Exception      (ErrorCall, evaluate, try)
 import           Control.Monad          (forM_)
 import           Control.Monad.IO.Class (liftIO)
@@ -26,17 +28,18 @@ import           Data.Function          ((&))
 import qualified Data.List              as List
 import           Data.String            (fromString)
 import           HasState               (HasState(..))
-import           Repl.Types             (Dict, DictEntry(..), Eval,
-                                         FortherCompileMode(..),
+import           Repl.Types             (DefineCtx(..), Dict, DictEntry(..),
+                                         Eval, FortherCompileMode(..),
                                          Interpreter(..), ReadMode(..),
-                                         StackOperation, setStack)
+                                         StackOperation, defineCtx, setStack)
 import           Result                 (orFailWith)
 import qualified Stack
 import           Stack                  (StackElement(..), divides, empty,
                                          implies, pop, popN, prettyPrint, push,
                                          toToken)
 import           System.Exit            (exitSuccess)
-import           Token                  (FWord, Flag(..), withFlags, word)
+import           Token                  (FWord, Flag(..), setFlags, withFlags,
+                                         word)
 
 readModeIsFile :: ReadMode -> Bool
 readModeIsFile  = \case
@@ -48,6 +51,9 @@ setCompileMode m = m { mode = WordDefineMode }
 
 setRunMode :: Interpreter -> Interpreter
 setRunMode m = m { mode = RunMode }
+
+setMode :: FortherCompileMode -> Interpreter -> Interpreter
+setMode mode m = m { mode = mode }
 
 unsafeWord :: String -> FWord
 unsafeWord = fromRight (error "Word malformed") . word
@@ -157,7 +163,6 @@ fortherFor eval = get >>= \m ->
                     put m { stack = stack
                           , dictionary = BinTree.delete (unsafeWord "I") m.dictionary
                           }
-
                 -- TODO I could implement looping over strings or lists with only one get
                 _ -> fail "Cannot loop over non exact values"
         _  -> fail "Not enough matching elements on the stack"
@@ -175,7 +180,22 @@ colon :: StackOperation ()
 colon = get >>= \m -> put m { mode = WordDefineMode }
 
 semicolon :: StackOperation ()
-semicolon = get >>= \m -> put m { mode = RunMode }
+semicolon = get >>=
+  \m -> do
+    may_ctx <- defineCtx <$> get
+    case may_ctx of
+      Nothing -> fail "Nothing to define! (defineCtx was Nothing)"
+      Just ctx ->
+        put $
+          ctx.body `deepseq` m
+            { mode = RunMode
+            , defineCtx = Nothing
+            , dictionary
+              = BT.insert
+                (force $ setFlags ctx.name ctx.flags)
+                -- drop 1 for the word itself
+                (Literal . drop 1 . Prelude.reverse $ ctx.body) m.dictionary
+            }
 
 -- | TODO remove eval parameter
 -- TODO ; should be a word
@@ -200,6 +220,11 @@ def eval =
 
         & i (uw ":")      (BuiltIn colon)
         & i (sofort ";")  (BuiltIn semicolon)
+
+        -- for use in : bar : foo 1 ;; ; (when bar is called, foo is defined)
+        -- this doesnt work currently as a subsequent definition would
+        -- be in compile mode again
+        -- & i (uw "semi")   (BuiltIn semicolon)
 
         -- -- Word definition
         -- & i (uw ":")      (BuiltIn setDefine)
